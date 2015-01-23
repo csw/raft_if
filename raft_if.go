@@ -22,6 +22,9 @@ import (
 // lifted from http://bazaar.launchpad.net/~niemeyer/gommap/trunk/view/head:/gommap.go
 type Shm []byte
 
+var ri *raft.Raft
+var shm Shm
+
 func main() {
 	port := flag.Int("port", 9001, "Raft port to listen on")
 	single := flag.Bool("single", false, "Run in single-node mode")
@@ -29,10 +32,14 @@ func main() {
 
 	fmt.Printf("Hello, world!\n")
 
-	shm, err := ShmInit();
+	C.raft_start_client()
+	time.Sleep(2*time.Second)
+
+	nshm, err := ShmInit()
 	if (err != nil) {
 		panic("Failed to initialize shared memory!")
 	}
+	shm = nshm
 	fmt.Printf("Shared memory initialized.\n")
 
 	conf := raft.DefaultConfig()
@@ -71,8 +78,27 @@ func main() {
 		panic(fmt.Sprintf("Failed to create Raft instance: %v", err))
 	}
 
-	time.Sleep(5*time.Second)
-	exercise(raft)
+	ri = raft
+	if StartWorkers() != nil {
+		panic(fmt.Sprintf("Failed to start workers: %v", err))
+	}
+
+	for {
+		time.Sleep(5*time.Second)
+	}
+}
+
+func StartWorkers() error {
+	for i := 0; i < 16; i++ {
+		go RunWorker(i)
+	}
+	return nil
+}
+
+func RunWorker(i int) {
+	for {
+		C.await_call(C.uint32_t(i))
+	}
 }
 
 func ShmInit() (Shm, error) {
@@ -105,6 +131,17 @@ func exercise(r *raft.Raft) {
 // Interface functions
 
 //export RaftApply
+func RaftApply(cmd_offset uintptr, cmd_len uintptr, timeout uint64) (unsafe.Pointer, error) {
+	cmd := shm[cmd_offset:cmd_offset+cmd_len]
+	fmt.Printf("Applying command (%d bytes): %q\n",
+		len(cmd), cmd)
+	future := ri.Apply(cmd, time.Duration(timeout))
+	if future.Error() == nil {
+		return nil, nil
+	} else {
+		return nil, future.Error()
+	}
+}
 
 // Temporary scaffolding
 
