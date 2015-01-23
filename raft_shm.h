@@ -60,7 +60,8 @@ private:
 class Scoreboard
 {
 public:
-    Scoreboard() = default;
+    Scoreboard();
+    std::atomic<bool> is_leader;
     CallSlot slots[16];
 
     Scoreboard(Scoreboard&) = delete;

@@ -89,6 +89,7 @@ func main() {
 }
 
 func StartWorkers() error {
+	go ReportLeaderStatus()
 	for i := 0; i < 16; i++ {
 		go RunWorker(i)
 	}
@@ -98,6 +99,14 @@ func StartWorkers() error {
 func RunWorker(i int) {
 	for {
 		C.await_call(C.uint32_t(i))
+	}
+}
+
+func ReportLeaderStatus() {
+	leaderCh := ri.LeaderCh()
+	for {
+		leaderState := <-leaderCh
+		C.raft_is_leader(C._Bool(leaderState))
 	}
 }
 
@@ -137,8 +146,10 @@ func RaftApply(cmd_offset uintptr, cmd_len uintptr, timeout uint64) (unsafe.Poin
 		len(cmd), cmd)
 	future := ri.Apply(cmd, time.Duration(timeout))
 	if future.Error() == nil {
+		fmt.Printf("Command succeeded.\n")
 		return nil, nil
 	} else {
+		fmt.Printf("Command failed: %v\n", future.Error())
 		return nil, future.Error()
 	}
 }

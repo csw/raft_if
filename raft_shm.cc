@@ -10,6 +10,10 @@ using boost::interprocess::unique_instance;
 managed_shared_memory shm;
 Scoreboard* scoreboard;
 
+Scoreboard::Scoreboard()
+    : is_leader(false)
+{}
+
 CallSlot& Scoreboard::grab_slot()
 {
     for (;;) {
