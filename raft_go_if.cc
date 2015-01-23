@@ -52,7 +52,7 @@ void dispatch_apply(raft::CallSlot& slot, raft::ApplyCall& call)
     slot.ret_cond.notify_one();
 }
 
-void raft_is_leader(bool val)
+void raft_set_leader(bool val)
 {
     raft::scoreboard->is_leader = val;
 }

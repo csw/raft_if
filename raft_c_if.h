@@ -1,6 +1,8 @@
 #ifndef RAFT_C_IF_H
 #define RAFT_C_IF_H
 
+#include <stdbool.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -9,6 +11,7 @@ extern "C" {
     void free_raft_buffer(void* buf);
 
     // top half; client side
+    bool raft_is_leader();
 
     // blocking
     void* raft_apply(char* cmd, size_t cmd_len, uint64_t timeout_ns);

@@ -20,7 +20,7 @@ extern "C" {
     // goroutines call this to wait for a command
     void await_call(uint32_t slot);
 
-    void raft_is_leader(bool val);
+    void raft_set_leader(bool val);
 
     typedef struct {
         size_t offset;

@@ -106,7 +106,7 @@ func ReportLeaderStatus() {
 	leaderCh := ri.LeaderCh()
 	for {
 		leaderState := <-leaderCh
-		C.raft_is_leader(C._Bool(leaderState))
+		C.raft_set_leader(C._Bool(leaderState))
 	}
 }
 

@@ -15,7 +15,7 @@ void run_client()
     fprintf(stderr, "C client starting.\n");
     init("raft", true);
 
-    while (! raft::scoreboard->is_leader) {
+    while (! raft_is_leader()) {
         sleep(1);
     }
 
@@ -26,6 +26,7 @@ void run_client()
         snprintf(buf, BUFSIZE, "Raft command #%d", i);
         // ignore return value
         raft_apply(buf, BUFSIZE, 0);
+        raft::shm.deallocate(buf);
         sleep(1);
     }
 }

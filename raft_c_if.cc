@@ -8,6 +8,11 @@
 
 using boost::interprocess::anonymous_instance;
 
+bool raft_is_leader()
+{
+    return raft::scoreboard->is_leader;
+}
+
 void* raft_apply(char* cmd, size_t cmd_len, uint64_t timeout_ns)
 {
     raft::SlotHandle sh(*raft::scoreboard);
@@ -21,7 +26,6 @@ void* raft_apply(char* cmd, size_t cmd_len, uint64_t timeout_ns)
     fprintf(stderr, "Allocated call buffer at %p.\n", &call);
 
     call.cmd_buf = raft::shm.get_handle_from_address(cmd);
-    //.offset = ((void*)cmd) - raft::shm.get_address();
     call.cmd_len = cmd_len;
     call.timeout_ns = timeout_ns;
 
@@ -34,6 +38,7 @@ void* raft_apply(char* cmd, size_t cmd_len, uint64_t timeout_ns)
 
     sh.slot.ret_ready = false;
 
+    raft::shm.destroy_ptr(&call);
     return nullptr;
 }
 
