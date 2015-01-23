@@ -2,6 +2,7 @@ package main
 
 import (
 	// #cgo CXXFLAGS: -std=c++11
+	// #cgo LDFLAGS: -lraft
 	// #include "raft_go_if.h"
 	"C"
 	"flag"
@@ -30,10 +31,7 @@ func main() {
 	single := flag.Bool("single", false, "Run in single-node mode")
 	flag.Parse()
 
-	fmt.Printf("Hello, world!\n")
-
-	C.raft_start_client()
-	time.Sleep(2*time.Second)
+	fmt.Printf("Initializing Raft shared memory.\n")
 
 	nshm, err := ShmInit()
 	if (err != nil) {
@@ -82,6 +80,8 @@ func main() {
 	if StartWorkers() != nil {
 		panic(fmt.Sprintf("Failed to start workers: %v", err))
 	}
+
+	C.raft_ready()
 
 	for {
 		time.Sleep(5*time.Second)

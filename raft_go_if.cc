@@ -10,9 +10,14 @@ extern "C" {
 #include "_cgo_export.h"
 }
 
-using mutex_lock = std::unique_lock<interprocess_mutex>;
+using mutex_lock = std::unique_lock<boost::interprocess::interprocess_mutex>;
 
 void dispatch_apply(raft::CallSlot& slot, raft::ApplyCall& call);
+
+void raft_ready()
+{
+    raft::scoreboard->is_raft_running = true;
+}
 
 void await_call(uint32_t slot_n)
 {
@@ -59,27 +64,11 @@ void raft_set_leader(bool val)
 
 void* raft_shm_init()
 {
-    raft::init("raft", false);
+    raft::shm_init("raft", false);
     return raft::shm.get_address();
 }
 
 size_t raft_shm_size()
 {
     return raft::shm.get_size();
-}
-
-void raft_start_client()
-{
-    pid_t kidpid = fork();
-    if (kidpid == -1) {
-        perror("Couldn't fork");
-        abort();
-    } else if (kidpid) {
-        // parent, Go side
-        fprintf(stderr, "Forked child: pid %d\n", kidpid);
-        sleep(2);
-    } else {
-        // child, C side
-        raft::run_client();
-    }
 }

@@ -11,11 +11,10 @@ extern "C" {
 
    // interface between Raft and the IPC layer, in C
 
-    // for testing purposes
-    void raft_start_client();
-
     void* raft_shm_init();
     size_t raft_shm_size();
+
+    void raft_ready();
 
     // goroutines call this to wait for a command
     void await_call(uint32_t slot);
