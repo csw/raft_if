@@ -1,6 +1,8 @@
 package main
 
 import (
+	// #cgo CPPFLAGS: -I/Users/csw/src/libraft
+	// #cgo LDFLAGS: -L/Users/csw/src/libraft
 	// #cgo CXXFLAGS: -std=c++11
 	// #cgo LDFLAGS: -lraft
 	// #include "raft_go_if.h"
@@ -139,6 +141,11 @@ func exercise(r *raft.Raft) {
 
 // Interface functions
 
+// note: multiple return value structs have members r0, r1, ...
+// errors are represented as a GoInterface struct
+// typedef struct { void *data; GoInt len; GoInt cap; } GoSlice
+// typedef struct { char *p; GoInt n; } GoString
+
 //export RaftApply
 func RaftApply(cmd_offset uintptr, cmd_len uintptr, timeout uint64) (unsafe.Pointer, error) {
 	cmd := shm[cmd_offset:cmd_offset+cmd_len]
@@ -151,6 +158,25 @@ func RaftApply(cmd_offset uintptr, cmd_len uintptr, timeout uint64) (unsafe.Poin
 	} else {
 		fmt.Printf("Command failed: %v\n", future.Error())
 		return nil, future.Error()
+	}
+}
+
+//export TranslateRaftError
+func TranslateRaftError(err error) C.RaftError {
+	switch err {
+	case nil: return C.RAFT_SUCCESS
+	case raft.ErrLeader: return C.RAFT_E_LEADER
+	case raft.ErrNotLeader: return C.RAFT_E_NOT_LEADER
+	case raft.ErrLeadershipLost: return C.RAFT_E_LEADERSHIP_LOST
+	case raft.ErrRaftShutdown: return C.RAFT_E_SHUTDOWN
+	case raft.ErrEnqueueTimeout: return C.RAFT_E_ENQUEUE_TIMEOUT
+	case raft.ErrKnownPeer: return C.RAFT_E_KNOWN_PEER
+	case raft.ErrUnknownPeer: return C.RAFT_E_UNKNOWN_PEER
+	case raft.ErrLogNotFound: return C.RAFT_E_LOG_NOT_FOUND
+	case raft.ErrPipelineReplicationNotSupported: return C.RAFT_E_PIPELINE_REPLICATION_NOT_SUPP
+	case raft.ErrTransportShutdown: return C.RAFT_E_TRANSPORT_SHUTDOWN
+	case raft.ErrPipelineShutdown: return C.RAFT_E_PIPELINE_SHUTDOWN
+	default: return C.RAFT_E_OTHER
 	}
 }
 
@@ -196,6 +222,7 @@ func (m *MockFSM) Apply(log *raft.Log) interface{} {
 func (m *MockFSM) Snapshot() (raft.FSMSnapshot, error) {
 	m.Lock()
 	defer m.Unlock()
+	fmt.Printf("=== FSM snapshot requested ===\n");
 	return &MockSnapshot{m.logs, len(m.logs)}, nil
 }
 
@@ -203,6 +230,7 @@ func (m *MockFSM) Restore(inp io.ReadCloser) error {
 	m.Lock()
 	defer m.Unlock()
 	defer inp.Close()
+	fmt.Printf("=== FSM restore requested ===\n");
 	hd := codec.MsgpackHandle{}
 	dec := codec.NewDecoder(inp, &hd)
 

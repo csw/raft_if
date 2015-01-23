@@ -52,8 +52,13 @@ void dispatch_apply(raft::RaftCallSlot& slot, raft::ApplyCall& call)
     size_t cmd_offset = ((char*) cmd_ptr) - ((char*) shm_ptr);
 
     auto res = RaftApply(cmd_offset, call.cmd_len, call.timeout_ns);
-    // XXX: dummy
-    slot.state = raft::CallState::Success;
+    slot.error = TranslateRaftError(res.r1);
+    if (!slot.error) {
+        slot.state = raft::CallState::Success;
+        slot.retval = (uintptr_t) res.r0;
+    } else {
+        slot.state = raft::CallState::Error;
+    }
     slot.ret_ready = true;
     slot.ret_cond.notify_one();
 }
