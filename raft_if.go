@@ -1,18 +1,26 @@
 package main
 
 import (
+	// #cgo CXXFLAGS: -std=c++11
+	// #include "raft_go_if.h"
+	"C"
 	"flag"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"net"
 	"os"
+	"reflect"
 	"sync"
 	"time"
+	"unsafe"
 	"github.com/hashicorp/raft"
 	// should just be for scaffolding
 	"github.com/hashicorp/go-msgpack/codec"
 )
+
+// lifted from http://bazaar.launchpad.net/~niemeyer/gommap/trunk/view/head:/gommap.go
+type Shm []byte
 
 func main() {
 	port := flag.Int("port", 9001, "Raft port to listen on")
@@ -20,6 +28,13 @@ func main() {
 	flag.Parse()
 
 	fmt.Printf("Hello, world!\n")
+
+	shm, err := ShmInit();
+	if (err != nil) {
+		panic("Failed to initialize shared memory!")
+	}
+	fmt.Printf("Shared memory initialized.\n")
+
 	conf := raft.DefaultConfig()
 	conf.EnableSingleNode = *single
 	fsm := &MockFSM{}
@@ -60,6 +75,21 @@ func main() {
 	exercise(raft)
 }
 
+func ShmInit() (Shm, error) {
+	shared_base := C.raft_shm_init()
+	if shared_base == nil {
+		panic(fmt.Sprintf("Failed to allocate shared memory!"))
+	}
+
+	shared_len := C.raft_shm_size()
+	shm := Shm{}
+	dh := (*reflect.SliceHeader)(unsafe.Pointer(&shm))
+	dh.Data = uintptr(shared_base)
+	dh.Len = int(shared_len) // make sure it's under 2^32 bits...
+	dh.Cap = dh.Len
+	return shm, nil
+}
+
 func exercise(r *raft.Raft) {
 	if (r.State() == raft.Leader) {
 		fmt.Printf("This node is the leader.\n")
@@ -71,6 +101,12 @@ func exercise(r *raft.Raft) {
 		}
 	}
 }
+
+// Interface functions
+
+//export RaftApply
+
+// Temporary scaffolding
 
 // MockFSM is an implementation of the FSM interface, and just stores
 // the logs sequentially
