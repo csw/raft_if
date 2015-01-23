@@ -169,10 +169,28 @@ type MockSnapshot struct {
 }
 
 func (m *MockFSM) Apply(log *raft.Log) interface{} {
-	m.Lock()
-	defer m.Unlock()
-	m.logs = append(m.logs, log.Data)
-	return len(m.logs)
+	var c_type C.RaftLogType
+	var cmd_buf *C.char
+	var cmd_len C.size_t
+
+	fmt.Printf("Applying command to C FSM: %q\n", log.Data)
+
+	switch log.Type {
+	case raft.LogCommand: c_type = C.RAFT_LOG_COMMAND
+	case raft.LogNoop: c_type = C.RAFT_LOG_NOOP
+	case raft.LogAddPeer: c_type = C.RAFT_LOG_ADD_PEER
+	case raft.LogRemovePeer: c_type = C.RAFT_LOG_REMOVE_PEER
+	case raft.LogBarrier: c_type = C.RAFT_LOG_BARRIER
+	default:
+		panic("Unhandled log type!")
+	}
+	dh := (*reflect.SliceHeader)(unsafe.Pointer(&log.Data))
+	cmd_buf = (*C.char)(unsafe.Pointer(dh.Data))
+	cmd_len = C.size_t(dh.Len)
+	
+	rv := C.raft_fsm_apply(C.uint64_t(log.Index), C.uint64_t(log.Term), c_type, cmd_buf, cmd_len);
+
+	return rv
 }
 
 func (m *MockFSM) Snapshot() (raft.FSMSnapshot, error) {

@@ -1,6 +1,8 @@
 #ifndef RAFT_GO_IF_H
 #define RAFT_GO_IF_H
 
+#include "raft_defs.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -54,8 +56,9 @@ extern "C" {
      */
 
     //apply_future_t raft_apply(char *cmd, uint64_t timeout_ns);
-    
 
+    uint64_t raft_fsm_apply(uint64_t index, uint64_t term, RaftLogType type,
+                            char* cmd_buf, size_t cmd_len);
 
 #ifdef __cplusplus
 }
