@@ -6,7 +6,6 @@
 
 #include "raft_go_if.h"
 #include "raft_shm.h"
-#include "raft_client.h"
 
 extern "C" {
 #include "_cgo_export.h"
