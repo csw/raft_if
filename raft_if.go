@@ -9,10 +9,12 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
 	"net"
 	"os"
 	"reflect"
 	"sync"
+	"syscall"
 	"time"
 	"unsafe"
 	"github.com/hashicorp/raft"
@@ -25,20 +27,27 @@ type Shm []byte
 
 var ri *raft.Raft
 var shm Shm
+var lg *log.Logger
 
 func main() {
+	pid  := os.Getpid()
+	ppid := os.Getppid()
+	lg = log.New(os.Stderr, fmt.Sprintf("raft_if [%d] ", pid), log.LstdFlags)
+
 	port := flag.Int("port", 9001, "Raft port to listen on")
 	single := flag.Bool("single", false, "Run in single-node mode")
 	flag.Parse()
 
-	fmt.Printf("Initializing Raft shared memory.\n")
+	lg.Printf("Starting Raft service for parent PID %d.\n", ppid)
+	lg.Println("Initializing Raft shared memory.")
 
 	nshm, err := ShmInit()
 	if (err != nil) {
-		panic("Failed to initialize shared memory!")
+		lg.Panicln("Failed to initialize shared memory!")
 	}
 	shm = nshm
-	fmt.Printf("Shared memory initialized.\n")
+	lg.Printf("Shared memory initialized.\n")
+	go WatchParent(ppid)
 
 	conf := raft.DefaultConfig()
 	conf.EnableSingleNode = *single
@@ -51,13 +60,14 @@ func main() {
 	}
 	snapStore, err := raft.NewFileSnapshotStore(snapDir, 1, os.Stderr)
 	if (err != nil) {
-		panic(fmt.Sprintf("Creating snapshot store in %s failed: %v", snapDir, err))
+		lg.Panicf("Creating snapshot store in %s failed: %v",
+			snapDir, err)
 	}
 
 	bindAddr := fmt.Sprintf("127.0.0.1:%d", *port)
 	trans, err := raft.NewTCPTransport(bindAddr, nil, 16, 0, nil)
 	if err != nil {
-		panic(fmt.Sprintf("Binding to %s failed: %v", bindAddr, err))
+		lg.Panicf("Binding to %s failed: %v", bindAddr, err)
 	}
 
 	peerAddrs := make([]net.Addr, 0, len(flag.Args()))
@@ -65,7 +75,7 @@ func main() {
 		peer := flag.Args()[i]
 		peerAddr, err := net.ResolveTCPAddr("tcp", peer)
 		if err != nil {
-			panic(fmt.Sprintf("Failed to parse address %s", peer))
+			lg.Panicf("Failed to parse address %s", peer)
 		}
 		peerAddrs[i] = peerAddr
 	}
@@ -73,12 +83,12 @@ func main() {
 
 	raft, err := raft.NewRaft(conf, fsm, logStore, stableStore, snapStore, peers, trans)
 	if (err != nil) {
-		panic(fmt.Sprintf("Failed to create Raft instance: %v", err))
+		lg.Panicf("Failed to create Raft instance: %v", err)
 	}
 
 	ri = raft
 	if StartWorkers() != nil {
-		panic(fmt.Sprintf("Failed to start workers: %v", err))
+		lg.Panicf("Failed to start workers: %v", err)
 	}
 
 	C.raft_ready()
@@ -104,7 +114,7 @@ func ReportLeaderStatus() {
 func ShmInit() (Shm, error) {
 	shared_base := C.raft_shm_init()
 	if shared_base == nil {
-		panic(fmt.Sprintf("Failed to allocate shared memory!"))
+		lg.Panicf("Failed to allocate shared memory!")
 	}
 
 	shared_len := C.raft_shm_size()
@@ -114,6 +124,27 @@ func ShmInit() (Shm, error) {
 	dh.Len = int(shared_len) // make sure it's under 2^32 bits...
 	dh.Cap = dh.Len
 	return shm, nil
+}
+
+func WatchParent(ppid int) {
+	for {
+		err := syscall.Kill(ppid, 0)
+		if (err != nil) {
+			lg.Printf("Parent process %d has exited!\n", ppid)
+			OnParentExit()
+		}
+		time.Sleep(1*time.Second)
+	}
+}
+
+func OnParentExit() {
+	future := ri.Shutdown()
+	lg.Println("Waiting for Raft to shut down...");
+	if (future.Error() != nil) {
+		lg.Fatalf("Error during shutdown: %v\n")
+	} else {
+		lg.Fatalln("Shutdown due to parent exit complete.")
+	}
 }
 
 // Interface functions
@@ -131,7 +162,7 @@ func RaftApply(cmd_offset uintptr, cmd_len uintptr, timeout uint64) (unsafe.Poin
 	if future.Error() == nil {
 		return nil, C.RAFT_SUCCESS
 	} else {
-		fmt.Printf("[ERROR] Command failed: %v\n", future.Error())
+		lg.Printf("Command failed: %v\n", future.Error())
 		return nil, TranslateRaftError(future.Error())
 	}
 }
@@ -183,7 +214,7 @@ func (m *MockFSM) Apply(log *raft.Log) interface{} {
 	case raft.LogRemovePeer: c_type = C.RAFT_LOG_REMOVE_PEER
 	case raft.LogBarrier: c_type = C.RAFT_LOG_BARRIER
 	default:
-		panic("Unhandled log type!")
+		lg.Panicln("Unhandled log type!")
 	}
 	dh := (*reflect.SliceHeader)(unsafe.Pointer(&log.Data))
 	cmd_buf = (*C.char)(unsafe.Pointer(dh.Data))
@@ -197,7 +228,7 @@ func (m *MockFSM) Apply(log *raft.Log) interface{} {
 func (m *MockFSM) Snapshot() (raft.FSMSnapshot, error) {
 	m.Lock()
 	defer m.Unlock()
-	fmt.Printf("=== FSM snapshot requested ===\n");
+	lg.Println("=== FSM snapshot requested ===");
 	return &MockSnapshot{m.logs, len(m.logs)}, nil
 }
 
@@ -205,7 +236,7 @@ func (m *MockFSM) Restore(inp io.ReadCloser) error {
 	m.Lock()
 	defer m.Unlock()
 	defer inp.Close()
-	fmt.Printf("=== FSM restore requested ===\n");
+	lg.Println("=== FSM restore requested ===");
 	hd := codec.MsgpackHandle{}
 	dec := codec.NewDecoder(inp, &hd)
 
