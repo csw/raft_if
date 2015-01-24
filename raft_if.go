@@ -1,8 +1,6 @@
 package main
 
 import (
-	// #cgo CPPFLAGS: -I/Users/csw/src/libraft
-	// #cgo LDFLAGS: -L/Users/csw/src/libraft
 	// #cgo CXXFLAGS: -std=c++11
 	// #cgo LDFLAGS: -lraft
 	// #include "raft_go_if.h"
