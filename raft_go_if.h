@@ -18,9 +18,6 @@ extern "C" {
 
     void raft_ready();
 
-    // goroutines call this to wait for a command
-    void await_call(uint32_t slot);
-
     void raft_set_leader(bool val);
 
     typedef struct {

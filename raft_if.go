@@ -90,16 +90,7 @@ func main() {
 
 func StartWorkers() error {
 	go ReportLeaderStatus()
-	for i := 0; i < 16; i++ {
-		go RunWorker(i)
-	}
 	return nil
-}
-
-func RunWorker(i int) {
-	for {
-		C.await_call(C.uint32_t(i))
-	}
 }
 
 func ReportLeaderStatus() {
@@ -125,18 +116,6 @@ func ShmInit() (Shm, error) {
 	return shm, nil
 }
 
-func exercise(r *raft.Raft) {
-	if (r.State() == raft.Leader) {
-		fmt.Printf("This node is the leader.\n")
-		applyF := r.Apply([]byte("foo"), 1*time.Minute)
-		if applyF.Error() == nil {
-			fmt.Printf("Apply succeeded.\n")
-		} else {
-			fmt.Printf("Apply failed: %v", applyF.Error())
-		}
-	}
-}
-
 // Interface functions
 
 // note: multiple return value structs have members r0, r1, ...
@@ -145,17 +124,15 @@ func exercise(r *raft.Raft) {
 // typedef struct { char *p; GoInt n; } GoString
 
 //export RaftApply
-func RaftApply(cmd_offset uintptr, cmd_len uintptr, timeout uint64) (unsafe.Pointer, error) {
+func RaftApply(cmd_offset uintptr, cmd_len uintptr, timeout uint64) (unsafe.Pointer, C.RaftError) {
 	cmd := shm[cmd_offset:cmd_offset+cmd_len]
-	fmt.Printf("Applying command (%d bytes): %q\n",
-		len(cmd), cmd)
+	//ri.logger.Printf("[INFO] Applying command (%d bytes): %q\n", len(cmd), cmd)
 	future := ri.Apply(cmd, time.Duration(timeout))
 	if future.Error() == nil {
-		fmt.Printf("Command succeeded.\n")
-		return nil, nil
+		return nil, C.RAFT_SUCCESS
 	} else {
-		fmt.Printf("Command failed: %v\n", future.Error())
-		return nil, future.Error()
+		fmt.Printf("[ERROR] Command failed: %v\n", future.Error())
+		return nil, TranslateRaftError(future.Error())
 	}
 }
 
@@ -197,7 +174,7 @@ func (m *MockFSM) Apply(log *raft.Log) interface{} {
 	var cmd_buf *C.char
 	var cmd_len C.size_t
 
-	fmt.Printf("Applying command to C FSM: %q\n", log.Data)
+	//fmt.Printf("[DEBUG] Applying command to C FSM: %q\n", log.Data)
 
 	switch log.Type {
 	case raft.LogCommand: c_type = C.RAFT_LOG_COMMAND
