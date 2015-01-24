@@ -155,15 +155,16 @@ func OnParentExit() {
 // typedef struct { char *p; GoInt n; } GoString
 
 //export RaftApply
-func RaftApply(cmd_offset uintptr, cmd_len uintptr, timeout uint64) (unsafe.Pointer, C.RaftError) {
+func RaftApply(cmd_offset uintptr, cmd_len uintptr, timeout uint64) (C.uint64_t, C.RaftError) {
 	cmd := shm[cmd_offset:cmd_offset+cmd_len]
 	//ri.logger.Printf("[INFO] Applying command (%d bytes): %q\n", len(cmd), cmd)
 	future := ri.Apply(cmd, time.Duration(timeout))
 	if future.Error() == nil {
-		return nil, C.RAFT_SUCCESS
+		response := future.Response()
+		return response.(C.uint64_t), C.RAFT_SUCCESS
 	} else {
 		lg.Printf("Command failed: %v\n", future.Error())
-		return nil, TranslateRaftError(future.Error())
+		return 0, TranslateRaftError(future.Error())
 	}
 }
 

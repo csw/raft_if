@@ -84,6 +84,7 @@ void dispatch_apply(raft::RaftCallSlot& slot, raft::ApplyCall& call)
     if (!slot.error) {
         slot.state = raft::CallState::Success;
         slot.retval = (uintptr_t) res.r0;
+        fprintf(stderr, "raft_if: Apply value %#lx\n", slot.retval);
     } else {
         slot.state = raft::CallState::Error;
     }
@@ -130,6 +131,7 @@ uint64_t raft_fsm_apply(uint64_t index, uint64_t term, RaftLogType type,
     slot.ret_cond.wait(l, [&] () { return slot.ret_ready; });
 
     assert(sh.slot.state == raft::CallState::Success);
+    fprintf(stderr, "raft_if: FSM response %#lx\n", slot.retval);
 
     slot.ret_ready = false;
     slot.call_ready = false;
