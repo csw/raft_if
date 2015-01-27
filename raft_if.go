@@ -1,7 +1,7 @@
 package main
 
 import (
-	// #cgo CXXFLAGS: -std=c++11
+	// #cgo CXXFLAGS: -std=c++11 -Wall -Werror -Wextra -Wconversion -pedantic
 	// #cgo LDFLAGS: -lraft
 	// #include "raft_go_if.h"
 	"C"
@@ -147,6 +147,16 @@ func OnParentExit() {
 	}
 }
 
+func SendApplyReply(call C.raft_call, future raft.ApplyFuture) {
+	if future.Error() == nil {
+		response := future.Response()
+		C.raft_reply_apply(call, response.(C.uint64_t), C.RAFT_SUCCESS)
+	} else {
+		lg.Printf("Command failed: %v\n", future.Error())
+		C.raft_reply_apply(call, 0, TranslateRaftError(future.Error()))
+	}
+}
+
 // Interface functions
 
 // note: multiple return value structs have members r0, r1, ...
@@ -155,17 +165,11 @@ func OnParentExit() {
 // typedef struct { char *p; GoInt n; } GoString
 
 //export RaftApply
-func RaftApply(cmd_offset uintptr, cmd_len uintptr, timeout uint64) (C.uint64_t, C.RaftError) {
+func RaftApply(call C.raft_call, cmd_offset uintptr, cmd_len uintptr, timeout uint64) {
 	cmd := shm[cmd_offset:cmd_offset+cmd_len]
 	//ri.logger.Printf("[INFO] Applying command (%d bytes): %q\n", len(cmd), cmd)
 	future := ri.Apply(cmd, time.Duration(timeout))
-	if future.Error() == nil {
-		response := future.Response()
-		return response.(C.uint64_t), C.RAFT_SUCCESS
-	} else {
-		lg.Printf("Command failed: %v\n", future.Error())
-		return 0, TranslateRaftError(future.Error())
-	}
+	go SendApplyReply(call, future);
 }
 
 //export TranslateRaftError

@@ -11,17 +11,16 @@ extern "C" {
 #include "_cgo_export.h"
 }
 
-using mutex_lock = raft::mutex_lock;
+using namespace raft;
+
 using boost::interprocess::anonymous_instance;
 
 namespace {
 
-void dispatch_apply(raft::RaftCallSlot& slot, raft::ApplyCall& call);
-void run_worker(uint32_t slot_n);
-void await_call(uint32_t slot_n);
-RaftError translate_raft_error(GoInterface& err_if);
+void dispatch_apply(CallSlot<ApplyArgs, true>& slot);
+void run_worker();
 
-const static uint32_t N_WORKERS = 16;
+const static uint32_t N_WORKERS = 4;
 
 std::vector<std::thread> workers;
 
@@ -31,7 +30,7 @@ void raft_ready()
 {
     workers.reserve(N_WORKERS);
     for (uint32_t i = 0; i < N_WORKERS; ++i) {
-        workers.emplace_back(run_worker, i);
+        workers.emplace_back(run_worker);
     }
     
     raft::scoreboard->is_raft_running = true;
@@ -39,110 +38,112 @@ void raft_ready()
 
 namespace {
 
-void run_worker(uint32_t slot_n)
+void run_worker()
 {
-    fprintf(stderr, "Starting worker %u.\n", slot_n);
+    fprintf(stderr, "Starting worker.\n");
     for (;;) {
-        await_call(slot_n);
+        auto rec = scoreboard->api_queue.take();
+        CallTag tag = rec.first;
+        BaseSlot::pointer slot = rec.second;
+        fprintf(stderr, "API call received, tag %d, call %p.\n",
+                tag, slot.get());
+        raft::mutex_lock l(slot->owned);
+        slot->timings.record("call received");
+        assert(slot->state == raft::CallState::Pending);
+
+        switch (tag) {
+        case CallTag::Apply:
+            dispatch_apply((CallSlot<ApplyArgs, true>&) *slot);
+            break;
+        default:
+            fprintf(stderr, "Unhandled call type: %d\n",
+                    tag);
+            abort();
+        }
     }
 }
 
-void await_call(uint32_t slot_n)
+uintptr_t shm_offset(void* ptr)
 {
-    assert(slot_n < 16);
-    raft::RaftCallSlot& slot = raft::scoreboard->slots[slot_n];
-    mutex_lock l(slot.owned);
-    slot.call_cond.wait(l, [&] () { return slot.call_ready; });
-    slot.timings.record("call received");
-
-    assert(slot.state == raft::CallState::Pending);
-
-    switch (slot.call_type) {
-    case raft::APICall::Apply:
-        dispatch_apply(slot, slot.call.apply);
-        break;
-    }
-
-    slot.call_ready = false;
-    slot.timings.record("return issued");
+    uintptr_t shm_base = (uintptr_t) shm.get_address();
+    uintptr_t shm_end = (uintptr_t) shm_base + shm.get_size();
+    uintptr_t address = (uintptr_t) ptr;
+    assert(address >= shm_base && address < shm_end);
+    return address - shm_base;
 }
 
-void dispatch_apply(raft::RaftCallSlot& slot, raft::ApplyCall& call)
+void dispatch_apply(CallSlot<ApplyArgs, true>& slot)
 {
-    assert(slot.call_type == raft::APICall::Apply);
+    assert(slot.tag == CallTag::Apply);
     
-    void* cmd_ptr = raft::shm.get_address_from_handle(call.cmd_buf);
-    fprintf(stderr, "Found command buffer at %p.\n", cmd_ptr);
-    void* shm_ptr = raft::shm.get_address();
-    assert(cmd_ptr > shm_ptr);
-    size_t cmd_offset = ((char*) cmd_ptr) - ((char*) shm_ptr);
+    size_t cmd_offset = shm_offset(slot.args.cmd_buf.get());
+    fprintf(stderr, "Command offset: %#lx\n", cmd_offset);
 
     slot.timings.record("RaftApply call");
-    auto res = RaftApply(cmd_offset, call.cmd_len, call.timeout_ns);
-    slot.timings.record("RaftApply return");
-    slot.error = res.r1;
-    if (!slot.error) {
-        slot.state = raft::CallState::Success;
-        slot.retval = (uintptr_t) res.r0;
-        fprintf(stderr, "raft_if: Apply value %#lx\n", slot.retval);
-    } else {
-        slot.state = raft::CallState::Error;
-    }
-    slot.ret_ready = true;
-    slot.ret_cond.notify_one();
+    RaftApply(&slot, cmd_offset, slot.args.cmd_len, slot.args.timeout_ns);
 }
 
+}
+
+void raft_reply_apply(raft_call call_p, uint64_t retval, RaftError error)
+{
+    auto* slot = (BaseSlot*) call_p;
+    mutex_lock lock(slot->owned);
+    slot->timings.record("RaftApply return");
+    assert(slot->tag == CallTag::Apply);
+    slot->retval = retval;
+    slot->error = error;
+    slot->state = error ? CallState::Error : CallState::Success;
+
+    slot->ret_ready = true;
+    slot->ret_cond.notify_one();
+    slot->timings.record("result dispatched");
 }
 
 uint64_t raft_fsm_apply(uint64_t index, uint64_t term, RaftLogType type,
                         char* cmd_buf, size_t cmd_len)
 {
-    auto start_t = std::chrono::high_resolution_clock::now();
-    auto& slot = raft::scoreboard->fsm_slot;
-    raft::SlotHandle<raft::FSMOp> sh(slot);
-    raft::mutex_lock l(slot.owned);
-    assert(slot.call_ready == false);
+    auto start_t = Timings::clock::now();
+    shm_handle cmd_handle;
+    char* shm_buf = nullptr;
 
-    slot.call_type = raft::FSMOp::Apply;
-    slot.state = raft::CallState::Pending;
-
-    raft::LogEntry& log = slot.call.log_entry; 
-    log.index = index;
-    log.term = term;
-    log.log_type = type;
-
-    char *shm_buf = nullptr;
-    
-    if (raft::in_shm_bounds(cmd_buf)) {
-        log.data_buf = raft::shm.get_handle_from_address(cmd_buf);
-        assert(log.data_buf);
+    if (in_shm_bounds(cmd_buf)) {
+        cmd_handle = raft::shm.get_handle_from_address(cmd_buf);
     } else {
         shm_buf = (char*) raft::shm.allocate(cmd_len);
         assert(shm_buf);
         fprintf(stderr, "Allocated %lu-byte buffer for log command at %p.\n",
                 cmd_len, shm_buf);
         memcpy(shm_buf, cmd_buf, cmd_len);
-        log.data_buf = raft::shm.get_handle_from_address(shm_buf);
+        cmd_handle = raft::shm.get_handle_from_address(shm_buf);
     }
-    log.data_len = cmd_len;
+    auto cmd_buf_t = Timings::clock::now();
 
-    slot.call_ready = true;
-    slot.call_cond.notify_one();
-    slot.ret_cond.wait(l, [&] () { return slot.ret_ready; });
+    auto* slot = shm.construct< CallSlot<LogEntry, true> >(anonymous_instance)
+        (CallTag::FSMApply, index, term, type, cmd_handle, cmd_len);
+    slot->timings = Timings(start_t);
+    slot->timings.record("command buffer ready", cmd_buf_t);
+    slot->timings.record("slot ready");
+    auto rec = slot->rec();
+    fprintf(stderr, "Issuing FSMApply, tag %d.\n", rec.first);
+    scoreboard->fsm_queue.put(slot->rec());
 
-    assert(sh.slot.state == raft::CallState::Success);
-    fprintf(stderr, "raft_if: FSM response %#lx\n", slot.retval);
+    slot->wait();
 
-    slot.ret_ready = false;
-    slot.call_ready = false;
+    assert(slot->state == raft::CallState::Success);
+    assert(slot->error == RAFT_SUCCESS);
+    fprintf(stderr, "raft_if: FSM response %#llx\n", slot->retval);
+
     if (shm_buf)
-        raft::shm.deallocate(shm_buf);
+        shm.deallocate(shm_buf);
 
-    auto end_t = std::chrono::high_resolution_clock::now();
-    auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(end_t - start_t);
-    fprintf(stderr, "FSM Apply call completed in %lld us.\n", elapsed.count());
+    slot->timings.print();
+    fprintf(stderr, "====================\n");
 
-    return slot.retval;
+    auto rv = slot->retval;
+    shm.destroy_ptr(slot);
+
+    return rv;
 }
 
 void raft_set_leader(bool val)
