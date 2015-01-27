@@ -327,6 +327,14 @@ func RaftRemovePeer(call C.raft_call, host *C.char, port C.uint16_t) {
 	}
 }
 
+//export RaftShutdown
+func RaftShutdown(call C.raft_call) {
+	lg.Println("Requesting Raft shutdown.")
+	future := ri.Shutdown()
+	lg.Println("Waiting for Raft to shut down...");
+	go SendReply(call, future)
+}
+
 //export TranslateRaftError
 func TranslateRaftError(err error) C.RaftError {
 	switch err {
@@ -429,7 +437,7 @@ func MakeFIFO() (string, error) {
 	}
 	path := fmt.Sprintf("/tmp/fsm_snap_%d", random)
 	err = syscall.Mkfifo(path, 0600)
-	if err != nil {
+	if err == nil {
 		return path, nil
 	} else {
 		lg.Printf("mkfifo failed for %s: %v\n", path, err)

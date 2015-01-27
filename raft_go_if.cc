@@ -21,6 +21,7 @@ void dispatch_apply(CallSlot<ApplyArgs, true>& slot);
 void dispatch_snapshot(CallSlot<NoArgs, false>& slot);
 void dispatch_add_peer(CallSlot<NetworkAddr, false>& slot);
 void dispatch_remove_peer(CallSlot<NetworkAddr, false>& slot);
+void dispatch_shutdown(CallSlot<NoArgs, false>& slot);
 void run_worker();
 
 const static uint32_t N_WORKERS = 4;
@@ -69,6 +70,9 @@ void run_worker()
         case CallTag::RemovePeer:
             dispatch_remove_peer((CallSlot<NetworkAddr, false>&) *slot);
             break;
+        case CallTag::Shutdown:
+            dispatch_shutdown((CallSlot<NoArgs, false>&) *slot);
+            break;
         default:
             fprintf(stderr, "Unhandled call type: %d\n",
                     tag);
@@ -114,6 +118,12 @@ void dispatch_remove_peer(CallSlot<NetworkAddr, false>& slot)
 {
     assert(slot.tag == CallTag::RemovePeer);
     RaftRemovePeer(&slot, slot.args.host, slot.args.port);
+}
+
+void dispatch_shutdown(CallSlot<NoArgs, false>& slot)
+{
+    assert(slot.tag == CallTag::Shutdown);
+    RaftShutdown(&slot);
 }
 
 }
