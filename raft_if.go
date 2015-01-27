@@ -15,12 +15,15 @@ import (
 	"math/big"
 	"net"
 	"os"
+	"path"
 	"reflect"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
 	"unsafe"
 	"github.com/hashicorp/raft"
+	"github.com/hashicorp/raft-mdb"
 	// should just be for scaffolding
 	"github.com/hashicorp/go-msgpack/codec"
 )
@@ -34,17 +37,28 @@ var (
 	shm Shm
 	lg *log.Logger
 
+	ErrFileExists = errors.New("file exists")
 	ErrSnapshot = errors.New("snapshot failed")
 	ErrRestore = errors.New("restore failed")
 )
 
+type RaftServices struct {
+	logs   raft.LogStore
+	stable raft.StableStore
+	snaps  raft.SnapshotStore
+}
+
 func main() {
+	var err error
+
 	pid  := os.Getpid()
 	ppid := os.Getppid()
 	lg = log.New(os.Stderr, fmt.Sprintf("raft_if [%d] ", pid), log.LstdFlags)
 
+	dir := flag.String("dir", "", "State directory")
 	port := flag.Int("port", 9001, "Raft port to listen on")
 	single := flag.Bool("single", false, "Run in single-node mode")
+	peers_s := flag.String("peers", "", "Static list of peers")
 	flag.Parse()
 
 	lg.Printf("Starting Raft service for parent PID %d.\n", ppid)
@@ -60,37 +74,43 @@ func main() {
 
 	conf := raft.DefaultConfig()
 	conf.EnableSingleNode = *single
+	lg.Printf("Single node: %v\n", conf.EnableSingleNode)
 	fsm := &RemoteFSM{}
-	logStore := raft.NewInmemStore()
-	stableStore := raft.NewInmemStore()
-	snapDir, err := ioutil.TempDir("", "raft")
-	if err != nil {
-		panic(fmt.Sprintf("err: %v ", err))
+
+	var svcs *RaftServices
+	var peers raft.PeerStore
+
+	if *dir != "" {
+		lg.Printf("Setting up standard Raft services in %s.\n", *dir)
+		svcs, err = StdServices(*dir)
+	} else {
+		lg.Println("Setting up dummy Raft services.")
+		svcs, err = DummyServices()
 	}
-	snapStore, err := raft.NewFileSnapshotStore(snapDir, 1, os.Stderr)
-	if (err != nil) {
-		lg.Panicf("Creating snapshot store in %s failed: %v",
-			snapDir, err)
+	if err != nil {
+		lg.Fatalf("Failed to initialize Raft base services: %v\n", err)
 	}
 
 	bindAddr := fmt.Sprintf("127.0.0.1:%d", *port)
+	lg.Printf("Binding to %s.\n", bindAddr)
 	trans, err := raft.NewTCPTransport(bindAddr, nil, 16, 0, nil)
 	if err != nil {
 		lg.Panicf("Binding to %s failed: %v", bindAddr, err)
 	}
 
-	peerAddrs := make([]net.Addr, 0, len(flag.Args()))
-	for i := 0; i < len(flag.Args()); i++ {
-		peer := flag.Args()[i]
-		peerAddr, err := net.ResolveTCPAddr("tcp", peer)
+	if (*peers_s != "" || *dir == "") {
+		lg.Printf("Setting up static peers: %s\n", *peers_s)
+		peers, err = StaticPeers(*peers_s)
 		if err != nil {
-			lg.Panicf("Failed to parse address %s", peer)
+			lg.Fatalf("Failed to initialize peer set: %v\n", err)
 		}
-		peerAddrs[i] = peerAddr
+	} else {
+		lg.Printf("Setting up JSON peers in %s.\n", *dir)
+		peers = raft.NewJSONPeers(*dir, trans)
 	}
-	peers := &raft.StaticPeers{ StaticPeers: peerAddrs}
 
-	raft, err := raft.NewRaft(conf, fsm, logStore, stableStore, snapStore, peers, trans)
+	raft, err := raft.NewRaft(conf, fsm,
+		svcs.logs, svcs.stable, svcs.snaps, peers, trans)
 	if (err != nil) {
 		lg.Panicf("Failed to create Raft instance: %v", err)
 	}
@@ -105,6 +125,86 @@ func main() {
 	for {
 		time.Sleep(5*time.Second)
 	}
+}
+
+func DummyServices() (*RaftServices, error) {
+	logStore := raft.NewInmemStore()
+	stableStore := raft.NewInmemStore()
+	snapDir, err := ioutil.TempDir("", "raft")
+	if err != nil {
+		panic(fmt.Sprintf("err: %v ", err))
+	}
+	snapStore, err := raft.NewFileSnapshotStore(snapDir, 1, os.Stderr)
+	if (err != nil) {
+		lg.Panicf("Creating snapshot store in %s failed: %v",
+			snapDir, err)
+	}
+	return &RaftServices{ logStore, stableStore, snapStore }, nil
+}
+
+func StdServices(base string) (*RaftServices, error) {
+	var err error
+	if err = MkdirIfNeeded(base); err != nil {
+		return nil, err
+	}
+	snapDir := path.Join(base, "snapshots")
+	if err = MkdirIfNeeded(snapDir); err != nil {
+		return nil, err
+	}
+
+	mdbStore, err := raftmdb.NewMDBStore(base)
+	if err != nil {
+		lg.Printf("Creating MDBStore for %s failed: %v\n", base, err)
+		return nil, err
+	}
+	// TODO: knobs for snapshot retention etc
+	snapStore, err := raft.NewFileSnapshotStore(snapDir, 1, os.Stderr)
+	if err != nil {
+		lg.Printf("Creating FileSnapshotStore for %s failed: %v\n",
+			snapDir, err)
+		return nil, err
+	}
+	return &RaftServices{ mdbStore, mdbStore, snapStore }, nil
+}
+
+func MkdirIfNeeded(path string) error {
+	dir_info, err := os.Stat(path)
+	if err == nil {
+		if dir_info.IsDir() {
+			// directory exists
+			return nil
+		} else {
+			return ErrFileExists
+		}
+	} else if os.IsNotExist(err) {
+		err = os.Mkdir(path, 0755)
+		if err == nil {
+			return nil
+		} else {
+			lg.Printf("Failed to create Raft dir %s: %v", path, err)
+			return err
+		}
+	} else {
+		// some other error?
+		return err
+	}
+}
+
+func StaticPeers(peers_s string) (raft.PeerStore, error) {
+	peerL := strings.Split(peers_s, ",")
+	peerAddrs := make([]net.Addr, 0, len(peerL))
+	for i := range peerL {
+		peer := peerL[i]
+		if len(peer) == 0 { continue; }
+		addr, err := net.ResolveTCPAddr("tcp", peer)
+		if err != nil {
+			lg.Panicf("Failed to parse address %s", peer)
+		}
+		
+		peerAddrs = append(peerAddrs, addr)
+	}
+	lg.Printf("Static peers: %v\n", peerAddrs)
+	return &raft.StaticPeers{ StaticPeers: peerAddrs }, nil
 }
 
 func StartWorkers() error {
