@@ -35,6 +35,7 @@ var (
 	lg *log.Logger
 
 	ErrSnapshot = errors.New("snapshot failed")
+	ErrRestore = errors.New("restore failed")
 )
 
 func main() {
@@ -59,7 +60,7 @@ func main() {
 
 	conf := raft.DefaultConfig()
 	conf.EnableSingleNode = *single
-	fsm := &MockFSM{}
+	fsm := &RemoteFSM{}
 	logStore := raft.NewInmemStore()
 	stableStore := raft.NewInmemStore()
 	snapDir, err := ioutil.TempDir("", "raft")
@@ -219,7 +220,7 @@ func TranslateRaftError(err error) C.RaftError {
 
 // MockFSM is an implementation of the FSM interface, and just stores
 // the logs sequentially
-type MockFSM struct {
+type RemoteFSM struct {
 	sync.Mutex
 	logs [][]byte
 }
@@ -234,7 +235,7 @@ type PipeSnapshot struct {
 	complete chan bool
 }
 
-func (m *MockFSM) Apply(log *raft.Log) interface{} {
+func (m *RemoteFSM) Apply(log *raft.Log) interface{} {
 	var c_type C.RaftLogType
 	var cmd_buf *C.char
 	var cmd_len C.size_t
@@ -259,17 +260,11 @@ func (m *MockFSM) Apply(log *raft.Log) interface{} {
 	return rv
 }
 
-func (m *MockFSM) Snapshot() (raft.FSMSnapshot, error) {
+func (m *RemoteFSM) Snapshot() (raft.FSMSnapshot, error) {
 	lg.Println("=== FSM snapshot requested ===");
-	random, err := rand.Int(rand.Reader, big.NewInt(1<<32))
-	if err != nil {
-		lg.Printf("Failed to obtain random number: %v", err)
-		return nil, err
-	}
-	path := fmt.Sprintf("/tmp/fsm_snap_%d", random)
-	snap := PipeSnapshot{ path, make(chan bool) }
-	err = syscall.Mkfifo(path, 0600)
+	path, err := MakeFIFO()
 	if err == nil {
+		snap := PipeSnapshot{ path, make(chan bool) }
 		go StartSnapshot(&snap)
 		return &snap, nil
 	} else {
@@ -278,22 +273,70 @@ func (m *MockFSM) Snapshot() (raft.FSMSnapshot, error) {
 	} 
 }
 
-func (m *MockFSM) Restore(inp io.ReadCloser) error {
-	m.Lock()
-	defer m.Unlock()
+func (m *RemoteFSM) Restore(inp io.ReadCloser) error {
 	defer inp.Close()
 	lg.Println("=== FSM restore requested ===");
-	hd := codec.MsgpackHandle{}
-	dec := codec.NewDecoder(inp, &hd)
+	path, err := MakeFIFO()
+	if err != nil { return err }
+	status := make(chan bool)
+	go StartRestore(path, inp, status)
+	fsm_result := C.raft_fsm_restore(C.CString(path))
+	pipe_result := <- status
+	if (fsm_result == 0) && pipe_result {
+		lg.Println("Restore succeeded.")
+		return nil
+	} else {
+		lg.Println("Restore failed.")
+		return ErrRestore
+	}
+}
 
-	m.logs = nil
-	return dec.Decode(&m.logs)
+func MakeFIFO() (string, error) {
+	random, err := rand.Int(rand.Reader, big.NewInt(1<<32))
+	if err != nil {
+		lg.Printf("Failed to obtain random number: %v\n", err)
+		return "", err
+	}
+	path := fmt.Sprintf("/tmp/fsm_snap_%d", random)
+	err = syscall.Mkfifo(path, 0600)
+	if err != nil {
+		return path, nil
+	} else {
+		lg.Printf("mkfifo failed for %s: %v\n", path, err)
+		return "", err
+	}
 }
 
 func StartSnapshot(snap *PipeSnapshot) {
 	retval := C.raft_fsm_snapshot(C.CString(snap.path))
 	success := (retval == 0)
 	snap.complete <- success
+}
+
+func StartRestore(fifo string, source io.ReadCloser, status chan bool) {
+	sink, err := os.OpenFile(fifo, os.O_WRONLY, 0000)
+	if err != nil {
+		lg.Printf("Failed to open FIFO %s: %v\n", fifo, err)
+		status <- false
+		return
+	}
+	defer sink.Close()
+	err = os.Remove(fifo)
+	if err != nil {
+		lg.Printf("Failed to remove FIFO %s: %v\n", fifo, err)
+		status <- false
+		return
+	}
+
+	n_read, err := io.Copy(sink, source)
+	if err == nil {
+		if err = sink.Close(); err == nil {
+			lg.Printf("Wrote snapshot for restore, %d bytes.\n", n_read)
+			status <- true
+			return
+		}
+	}
+	status <- false
 }
 
 func (p *PipeSnapshot) Persist(sink raft.SnapshotSink) error {

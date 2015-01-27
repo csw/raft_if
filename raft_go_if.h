@@ -32,6 +32,8 @@ uint64_t raft_fsm_apply(uint64_t index, uint64_t term, RaftLogType type,
 
 int raft_fsm_snapshot(char *path);
 
+int raft_fsm_restore(char *path);
+
 #ifdef __cplusplus
 }
 #endif

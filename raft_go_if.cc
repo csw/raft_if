@@ -177,6 +177,19 @@ int raft_fsm_snapshot(char *path)
     return retval;
 }
 
+int raft_fsm_restore(char *path)
+{
+    auto* slot = shm.construct< CallSlot<Filename, true> >(anonymous_instance)
+        (CallTag::FSMRestore, path);
+    free(path);
+    scoreboard->fsm_queue.put(slot->rec());
+    slot->wait();
+    assert(is_terminal(slot->state));
+    int retval = (slot->state == raft::CallState::Success) ? 0 : 1;
+    slot->dispose();
+    return retval;
+}
+
 void raft_set_leader(bool val)
 {
     fprintf(stderr, "Leadership state change: %s\n",
