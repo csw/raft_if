@@ -5,11 +5,14 @@ import (
 	// #cgo LDFLAGS: -lraft
 	// #include "raft_go_if.h"
 	"C"
+	"crypto/rand"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"log"
+	"math/big"
 	"net"
 	"os"
 	"reflect"
@@ -25,9 +28,14 @@ import (
 // lifted from http://bazaar.launchpad.net/~niemeyer/gommap/trunk/view/head:/gommap.go
 type Shm []byte
 
-var ri *raft.Raft
-var shm Shm
-var lg *log.Logger
+var (
+
+	ri *raft.Raft
+	shm Shm
+	lg *log.Logger
+
+	ErrSnapshot = errors.New("snapshot failed")
+)
 
 func main() {
 	pid  := os.Getpid()
@@ -147,6 +155,15 @@ func OnParentExit() {
 	}
 }
 
+func SendReply(call C.raft_call, future raft.Future) {
+	if future.Error() == nil {
+		C.raft_reply(call, C.RAFT_SUCCESS)
+	} else {
+		lg.Printf("Command failed: %v\n", future.Error())
+		C.raft_reply(call, TranslateRaftError(future.Error()))
+	}
+}
+
 func SendApplyReply(call C.raft_call, future raft.ApplyFuture) {
 	if future.Error() == nil {
 		response := future.Response()
@@ -170,6 +187,13 @@ func RaftApply(call C.raft_call, cmd_offset uintptr, cmd_len uintptr, timeout ui
 	//ri.logger.Printf("[INFO] Applying command (%d bytes): %q\n", len(cmd), cmd)
 	future := ri.Apply(cmd, time.Duration(timeout))
 	go SendApplyReply(call, future);
+}
+
+//export RaftSnapshot
+func RaftSnapshot(call C.raft_call) {
+	lg.Println("Received snapshot API request.")
+	future := ri.Snapshot()
+	go SendReply(call, future)
 }
 
 //export TranslateRaftError
@@ -205,6 +229,11 @@ type MockSnapshot struct {
 	maxIndex int
 }
 
+type PipeSnapshot struct {
+	path     string
+	complete chan bool
+}
+
 func (m *MockFSM) Apply(log *raft.Log) interface{} {
 	var c_type C.RaftLogType
 	var cmd_buf *C.char
@@ -231,10 +260,22 @@ func (m *MockFSM) Apply(log *raft.Log) interface{} {
 }
 
 func (m *MockFSM) Snapshot() (raft.FSMSnapshot, error) {
-	m.Lock()
-	defer m.Unlock()
 	lg.Println("=== FSM snapshot requested ===");
-	return &MockSnapshot{m.logs, len(m.logs)}, nil
+	random, err := rand.Int(rand.Reader, big.NewInt(1<<32))
+	if err != nil {
+		lg.Printf("Failed to obtain random number: %v", err)
+		return nil, err
+	}
+	path := fmt.Sprintf("/tmp/fsm_snap_%d", random)
+	snap := PipeSnapshot{ path, make(chan bool) }
+	err = syscall.Mkfifo(path, 0600)
+	if err == nil {
+		go StartSnapshot(&snap)
+		return &snap, nil
+	} else {
+		lg.Printf("Failed to create snapshot FIFO %s: %v", path, err)
+		return nil, err
+	} 
 }
 
 func (m *MockFSM) Restore(inp io.ReadCloser) error {
@@ -247,6 +288,49 @@ func (m *MockFSM) Restore(inp io.ReadCloser) error {
 
 	m.logs = nil
 	return dec.Decode(&m.logs)
+}
+
+func StartSnapshot(snap *PipeSnapshot) {
+	retval := C.raft_fsm_snapshot(C.CString(snap.path))
+	success := (retval == 0)
+	snap.complete <- success
+}
+
+func (p *PipeSnapshot) Persist(sink raft.SnapshotSink) error {
+	source, err := os.Open(p.path)
+	if err != nil {
+		// TODO: more cleanup?
+		sink.Cancel()
+		return err
+	}
+	defer source.Close()
+	err = os.Remove(p.path)
+	if err != nil {
+		lg.Printf("Failed to remove FIFO: %v\n", err)
+		return err
+	}
+
+	written, err := io.Copy(sink, source)
+	if err == nil {
+		switch <- p.complete {
+		case true:
+			sink.Close()
+			lg.Printf("Snapshot succeeded, %d bytes.\n", written)
+			return nil
+		case false:
+			sink.Cancel()
+			return ErrSnapshot
+		default:
+			lg.Panicf("should never happen")
+			return ErrSnapshot // not reached
+		}
+	} else {
+		sink.Cancel()
+		return err
+	}
+}
+
+func (p *PipeSnapshot) Release() {
 }
 
 func (m *MockSnapshot) Persist(sink raft.SnapshotSink) error {

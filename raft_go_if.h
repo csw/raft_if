@@ -23,10 +23,14 @@ void raft_ready();
 
 void raft_set_leader(bool val);
 
+void raft_reply(raft_call call, RaftError error);
+
 void raft_reply_apply(raft_call call, uint64_t retval, RaftError error);
 
 uint64_t raft_fsm_apply(uint64_t index, uint64_t term, RaftLogType type,
                         char* cmd_buf, size_t cmd_len);
+
+int raft_fsm_snapshot(char *path);
 
 #ifdef __cplusplus
 }

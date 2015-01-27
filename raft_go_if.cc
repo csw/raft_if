@@ -18,6 +18,7 @@ using boost::interprocess::anonymous_instance;
 namespace {
 
 void dispatch_apply(CallSlot<ApplyArgs, true>& slot);
+void dispatch_snapshot(CallSlot<NoArgs, false>& slot);
 void run_worker();
 
 const static uint32_t N_WORKERS = 4;
@@ -57,6 +58,9 @@ void run_worker()
         case CallTag::Apply:
             dispatch_apply((CallSlot<ApplyArgs, true>&) *slot);
             break;
+        case CallTag::Snapshot:
+            dispatch_snapshot((CallSlot<NoArgs, false>&) *slot);
+            break;
         default:
             fprintf(stderr, "Unhandled call type: %d\n",
                     tag);
@@ -85,6 +89,21 @@ void dispatch_apply(CallSlot<ApplyArgs, true>& slot)
     RaftApply(&slot, cmd_offset, slot.args.cmd_len, slot.args.timeout_ns);
 }
 
+void dispatch_snapshot(CallSlot<NoArgs, false>& slot)
+{
+    assert(slot.tag == CallTag::Snapshot);
+    slot.timings.record("API call to Go");
+    RaftSnapshot(&slot);
+}
+
+}
+
+void raft_reply(raft_call call_p, RaftError error)
+{
+    auto* slot = (BaseSlot*) call_p;
+    mutex_lock lock(slot->owned);
+    slot->timings.record("Raft call return");
+    slot->reply(error);
 }
 
 void raft_reply_apply(raft_call call_p, uint64_t retval, RaftError error)
@@ -140,9 +159,22 @@ uint64_t raft_fsm_apply(uint64_t index, uint64_t term, RaftLogType type,
     fprintf(stderr, "====================\n");
 
     auto rv = slot->retval;
-    shm.destroy_ptr(slot);
+    slot->dispose();
 
     return rv;
+}
+
+int raft_fsm_snapshot(char *path)
+{
+    auto* slot = shm.construct< CallSlot<Filename, true> >(anonymous_instance)
+        (CallTag::FSMSnapshot, path);
+    free(path);
+    scoreboard->fsm_queue.put(slot->rec());
+    slot->wait();
+    assert(is_terminal(slot->state));
+    int retval = (slot->state == raft::CallState::Success) ? 0 : 1;
+    slot->dispose();
+    return retval;
 }
 
 void raft_set_leader(bool val)
