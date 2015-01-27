@@ -19,6 +19,8 @@ namespace {
 
 void dispatch_apply(CallSlot<ApplyArgs, true>& slot);
 void dispatch_snapshot(CallSlot<NoArgs, false>& slot);
+void dispatch_add_peer(CallSlot<NetworkAddr, false>& slot);
+void dispatch_remove_peer(CallSlot<NetworkAddr, false>& slot);
 void run_worker();
 
 const static uint32_t N_WORKERS = 4;
@@ -61,6 +63,12 @@ void run_worker()
         case CallTag::Snapshot:
             dispatch_snapshot((CallSlot<NoArgs, false>&) *slot);
             break;
+        case CallTag::AddPeer:
+            dispatch_add_peer((CallSlot<NetworkAddr, false>&) *slot);
+            break;
+        case CallTag::RemovePeer:
+            dispatch_remove_peer((CallSlot<NetworkAddr, false>&) *slot);
+            break;
         default:
             fprintf(stderr, "Unhandled call type: %d\n",
                     tag);
@@ -94,6 +102,18 @@ void dispatch_snapshot(CallSlot<NoArgs, false>& slot)
     assert(slot.tag == CallTag::Snapshot);
     slot.timings.record("API call to Go");
     RaftSnapshot(&slot);
+}
+
+void dispatch_add_peer(CallSlot<NetworkAddr, false>& slot)
+{
+    assert(slot.tag == CallTag::AddPeer);
+    RaftAddPeer(&slot, slot.args.host, slot.args.port);
+}
+
+void dispatch_remove_peer(CallSlot<NetworkAddr, false>& slot)
+{
+    assert(slot.tag == CallTag::RemovePeer);
+    RaftRemovePeer(&slot, slot.args.host, slot.args.port);
 }
 
 }

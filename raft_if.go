@@ -197,6 +197,36 @@ func RaftSnapshot(call C.raft_call) {
 	go SendReply(call, future)
 }
 
+//export RaftAddPeer
+func RaftAddPeer(call C.raft_call, host *C.char, port C.uint16_t) {
+	host_s := C.GoString(host)
+	addr_s := fmt.Sprintf("%s:%u", host_s, port)
+	addr, err := net.ResolveTCPAddr("tcp", addr_s)
+	if err != nil {
+		future := ri.AddPeer(addr)
+		go SendReply(call, future)
+	} else {
+		lg.Printf("Failed to resolve peer address %s: %v\n",
+			addr_s, err)
+		C.raft_reply(call, C.RAFT_E_OTHER)
+	}
+}
+
+//export RaftRemovePeer
+func RaftRemovePeer(call C.raft_call, host *C.char, port C.uint16_t) {
+	host_s := C.GoString(host)
+	addr_s := fmt.Sprintf("%s:%u", host_s, port)
+	addr, err := net.ResolveTCPAddr("tcp", addr_s)
+	if err != nil {
+		future := ri.RemovePeer(addr)
+		go SendReply(call, future)
+	} else {
+		lg.Printf("Failed to resolve peer address %s: %v\n",
+			addr_s, err)
+		C.raft_reply(call, C.RAFT_E_OTHER)
+	}
+}
+
 //export TranslateRaftError
 func TranslateRaftError(err error) C.RaftError {
 	switch err {
