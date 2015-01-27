@@ -43,12 +43,14 @@ void run_worker()
     fprintf(stderr, "Starting worker.\n");
     for (;;) {
         auto rec = scoreboard->api_queue.take();
+        auto recv_ts = Timings::clock::now();
         CallTag tag = rec.first;
         BaseSlot::pointer slot = rec.second;
+        raft::mutex_lock l(slot->owned);
+        slot->timings.record("call received", recv_ts);
+        slot->timings.record("call locked");
         fprintf(stderr, "API call received, tag %d, call %p.\n",
                 tag, slot.get());
-        raft::mutex_lock l(slot->owned);
-        slot->timings.record("call received");
         assert(slot->state == raft::CallState::Pending);
 
         switch (tag) {
@@ -91,13 +93,10 @@ void raft_reply_apply(raft_call call_p, uint64_t retval, RaftError error)
     mutex_lock lock(slot->owned);
     slot->timings.record("RaftApply return");
     assert(slot->tag == CallTag::Apply);
-    slot->retval = retval;
-    slot->error = error;
-    slot->state = error ? CallState::Error : CallState::Success;
-
-    slot->ret_ready = true;
-    slot->ret_cond.notify_one();
-    slot->timings.record("result dispatched");
+    if (!error)
+        slot->reply(retval);
+    else
+        slot->reply(error);
 }
 
 uint64_t raft_fsm_apply(uint64_t index, uint64_t term, RaftLogType type,
