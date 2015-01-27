@@ -15,7 +15,6 @@ import (
 	"math/big"
 	"net"
 	"os"
-	"path"
 	"reflect"
 	"strings"
 	"sync"
@@ -147,10 +146,6 @@ func StdServices(base string) (*RaftServices, error) {
 	if err = MkdirIfNeeded(base); err != nil {
 		return nil, err
 	}
-	snapDir := path.Join(base, "snapshots")
-	if err = MkdirIfNeeded(snapDir); err != nil {
-		return nil, err
-	}
 
 	mdbStore, err := raftmdb.NewMDBStore(base)
 	if err != nil {
@@ -158,10 +153,10 @@ func StdServices(base string) (*RaftServices, error) {
 		return nil, err
 	}
 	// TODO: knobs for snapshot retention etc
-	snapStore, err := raft.NewFileSnapshotStore(snapDir, 1, os.Stderr)
+	snapStore, err := raft.NewFileSnapshotStore(base, 1, os.Stderr)
 	if err != nil {
 		lg.Printf("Creating FileSnapshotStore for %s failed: %v\n",
-			snapDir, err)
+			base, err)
 		return nil, err
 	}
 	return &RaftServices{ mdbStore, mdbStore, snapStore }, nil
