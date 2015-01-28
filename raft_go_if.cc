@@ -20,6 +20,8 @@ namespace {
 zlog_category_t*    go_cat;
 
 void dispatch_apply(api::Apply::slot_t& slot);
+void dispatch_barrier(api::Barrier::slot_t& slot);
+void dispatch_verify_leader(api::VerifyLeader::slot_t& slot);
 void dispatch_snapshot(api::Snapshot::slot_t& slot);
 void dispatch_add_peer(api::AddPeer::slot_t& slot);
 void dispatch_remove_peer(api::RemovePeer::slot_t& slot);
@@ -63,6 +65,12 @@ void run_worker()
         case api::Apply::tag:
             dispatch_apply((api::Apply::slot_t&) *slot);
             break;
+        case api::Barrier::tag:
+            dispatch_barrier((api::Barrier::slot_t&) *slot);
+            break;
+        case api::VerifyLeader::tag:
+            dispatch_verify_leader((api::VerifyLeader::slot_t&) *slot);
+            break;
         case CallTag::Snapshot:
             dispatch_snapshot((api::Snapshot::slot_t&) *slot);
             break;
@@ -98,8 +106,17 @@ void dispatch_apply(api::Apply::slot_t& slot)
     
     size_t cmd_offset = shm_offset(slot.args.cmd_buf.get());
 
-    slot.timings.record("RaftApply call");
     RaftApply(&slot, cmd_offset, slot.args.cmd_len, slot.args.timeout_ns);
+}
+
+void dispatch_barrier(api::Barrier::slot_t& slot)
+{
+    RaftBarrier(&slot, slot.args.timeout_ns);
+}
+
+void dispatch_verify_leader(api::VerifyLeader::slot_t& slot)
+{
+    RaftVerifyLeader(&slot);
 }
 
 void dispatch_snapshot(api::Snapshot::slot_t& slot)

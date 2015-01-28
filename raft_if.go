@@ -280,11 +280,24 @@ func SendApplyReply(call C.raft_call, future raft.ApplyFuture) {
 // typedef struct { char *p; GoInt n; } GoString
 
 //export RaftApply
-func RaftApply(call C.raft_call, cmd_offset uintptr, cmd_len uintptr, timeout uint64) {
+func RaftApply(call C.raft_call, cmd_offset uintptr, cmd_len uintptr,
+	timeout_ns uint64) {
 	cmd := shm[cmd_offset:cmd_offset+cmd_len]
-	//ri.logger.Printf("[INFO] Applying command (%d bytes): %q\n", len(cmd), cmd)
-	future := ri.Apply(cmd, time.Duration(timeout))
+	// XXX: check duration conversion
+	future := ri.Apply(cmd, time.Duration(timeout_ns))
 	go SendApplyReply(call, future);
+}
+
+//export RaftBarrier
+func RaftBarrier(call C.raft_call, timeout_ns uint64) {
+	future := ri.Barrier(time.Duration(timeout_ns))
+	go SendReply(call, future);
+}
+
+//export RaftVerifyLeader
+func RaftVerifyLeader(call C.raft_call) {
+	future := ri.VerifyLeader()
+	go SendReply(call, future);
 }
 
 //export RaftSnapshot
