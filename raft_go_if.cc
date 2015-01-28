@@ -129,13 +129,13 @@ void dispatch_snapshot(api::Snapshot::slot_t& slot)
 void dispatch_add_peer(api::AddPeer::slot_t& slot)
 {
     assert(slot.tag == CallTag::AddPeer);
-    RaftAddPeer(&slot, slot.args.host, slot.args.port);
+    RaftAddPeer(&slot, (char*) slot.args.host, slot.args.port);
 }
 
 void dispatch_remove_peer(api::RemovePeer::slot_t& slot)
 {
     assert(slot.tag == CallTag::RemovePeer);
-    RaftRemovePeer(&slot, slot.args.host, slot.args.port);
+    RaftRemovePeer(&slot, (char*) slot.args.host, slot.args.port);
 }
 
 void dispatch_shutdown(api::Shutdown::slot_t& slot)
