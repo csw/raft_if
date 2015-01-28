@@ -17,6 +17,8 @@ using boost::interprocess::anonymous_instance;
 
 namespace {
 
+zlog_category_t*    go_cat;
+
 void dispatch_apply(CallSlot<ApplyArgs, true>& slot);
 void dispatch_snapshot(CallSlot<NoArgs, false>& slot);
 void dispatch_add_peer(CallSlot<NetworkAddr, false>& slot);
@@ -53,8 +55,8 @@ void run_worker()
         raft::mutex_lock l(slot->owned);
         slot->timings.record("call received", recv_ts);
         slot->timings.record("call locked");
-        fprintf(stderr, "API call received, tag %d, call %p.\n",
-                tag, slot.get());
+        zlog_debug(go_cat, "API call received, tag %d, call %p.",
+                   tag, slot.get());
         assert(slot->state == raft::CallState::Pending);
 
         switch (tag) {
@@ -74,8 +76,8 @@ void run_worker()
             dispatch_shutdown((CallSlot<NoArgs, false>&) *slot);
             break;
         default:
-            fprintf(stderr, "Unhandled call type: %d\n",
-                    tag);
+            zlog_fatal(go_cat, "Unhandled call type: %d",
+                       tag);
             abort();
         }
     }
@@ -95,7 +97,6 @@ void dispatch_apply(CallSlot<ApplyArgs, true>& slot)
     assert(slot.tag == CallTag::Apply);
     
     size_t cmd_offset = shm_offset(slot.args.cmd_buf.get());
-    fprintf(stderr, "Command offset: %#lx\n", cmd_offset);
 
     slot.timings.record("RaftApply call");
     RaftApply(&slot, cmd_offset, slot.args.cmd_len, slot.args.timeout_ns);
@@ -160,8 +161,8 @@ uint64_t raft_fsm_apply(uint64_t index, uint64_t term, RaftLogType type,
     } else {
         shm_buf = (char*) raft::shm.allocate(cmd_len);
         assert(shm_buf);
-        fprintf(stderr, "Allocated %lu-byte buffer for log command at %p.\n",
-                cmd_len, shm_buf);
+        zlog_debug(go_cat, "Allocated %lu-byte buffer for log command at %p.",
+                   cmd_len, shm_buf);
         memcpy(shm_buf, cmd_buf, cmd_len);
         cmd_handle = raft::shm.get_handle_from_address(shm_buf);
     }
@@ -173,20 +174,20 @@ uint64_t raft_fsm_apply(uint64_t index, uint64_t term, RaftLogType type,
     slot->timings.record("command buffer ready", cmd_buf_t);
     slot->timings.record("slot ready");
     auto rec = slot->rec();
-    fprintf(stderr, "Issuing FSMApply, tag %d.\n", rec.first);
+    zlog_debug(go_cat, "Issuing FSMApply, tag %d.", rec.first);
     scoreboard->fsm_queue.put(slot->rec());
 
     slot->wait();
 
     assert(slot->state == raft::CallState::Success);
     assert(slot->error == RAFT_SUCCESS);
-    fprintf(stderr, "raft_if: FSM response %#llx\n", slot->retval);
+    zlog_debug(go_cat, "FSM response %#llx", slot->retval);
 
     if (shm_buf)
         shm.deallocate(shm_buf);
 
     slot->timings.print();
-    fprintf(stderr, "====================\n");
+    //fprintf(stderr, "====================\n");
 
     auto rv = slot->retval;
     slot->dispose();
@@ -222,14 +223,15 @@ int raft_fsm_restore(char *path)
 
 void raft_set_leader(bool val)
 {
-    fprintf(stderr, "Leadership state change: %s\n",
-            val ? "is leader" : "not leader");
+    zlog_info(go_cat, "Leadership state change: %s",
+              val ? "is leader" : "not leader");
     raft::scoreboard->is_leader = val;
 }
 
 void* raft_shm_init()
 {
     raft::shm_init("raft", false);
+    go_cat = zlog_get_category("raft_go");
     return raft::shm.get_address();
 }
 
