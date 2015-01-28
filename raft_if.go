@@ -1,4 +1,4 @@
-package main
+package raft_if
 
 import (
 	// #cgo CXXFLAGS: -std=c++11 -Wall -Werror -Wextra -pedantic
@@ -19,14 +19,11 @@ import (
 	"os"
 	"reflect"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 	"unsafe"
 	"github.com/hashicorp/raft"
 	"github.com/hashicorp/raft-mdb"
-	// should just be for scaffolding
-	"github.com/hashicorp/go-msgpack/codec"
 )
 
 // lifted from http://bazaar.launchpad.net/~niemeyer/gommap/trunk/view/head:/gommap.go
@@ -364,18 +361,7 @@ func TranslateRaftError(err error) C.RaftError {
 	}
 }
 
-// Temporary scaffolding
-
-// MockFSM is an implementation of the FSM interface, and just stores
-// the logs sequentially
 type RemoteFSM struct {
-	sync.Mutex
-	logs [][]byte
-}
-
-type MockSnapshot struct {
-	logs     [][]byte
-	maxIndex int
 }
 
 type PipeSnapshot struct {
@@ -524,18 +510,4 @@ func (p *PipeSnapshot) Persist(sink raft.SnapshotSink) error {
 }
 
 func (p *PipeSnapshot) Release() {
-}
-
-func (m *MockSnapshot) Persist(sink raft.SnapshotSink) error {
-	hd := codec.MsgpackHandle{}
-	enc := codec.NewEncoder(sink, &hd)
-	if err := enc.Encode(m.logs[:m.maxIndex]); err != nil {
-		sink.Cancel()
-		return err
-	}
-	sink.Close()
-	return nil
-}
-
-func (m *MockSnapshot) Release() {
 }
