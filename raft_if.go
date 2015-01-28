@@ -415,6 +415,7 @@ func (m *RemoteFSM) Restore(inp io.ReadCloser) error {
 	if err != nil { return err }
 	status := make(chan bool)
 	go StartRestore(path, inp, status)
+	lg.Printf("Sending restore request to FSM.\n")
 	fsm_result := C.raft_fsm_restore(C.CString(path))
 	pipe_result := <- status
 	if (fsm_result == 0) && pipe_result {
@@ -449,6 +450,7 @@ func StartSnapshot(snap *PipeSnapshot) {
 }
 
 func StartRestore(fifo string, source io.ReadCloser, status chan bool) {
+	lg.Printf("Opening FIFO %s for restore...\n", fifo)
 	sink, err := os.OpenFile(fifo, os.O_WRONLY, 0000)
 	if err != nil {
 		lg.Printf("Failed to open FIFO %s: %v\n", fifo, err)

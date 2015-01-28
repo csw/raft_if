@@ -214,6 +214,7 @@ int raft_fsm_restore(char *path)
         (CallTag::FSMRestore, path);
     free(path);
     scoreboard->fsm_queue.put(slot->rec());
+    zlog_info(go_cat, "Sent restore request to FSM.");
     slot->wait();
     assert(is_terminal(slot->state));
     int retval = (slot->state == raft::CallState::Success) ? 0 : 1;
