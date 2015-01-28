@@ -19,11 +19,11 @@ namespace {
 
 zlog_category_t*    go_cat;
 
-void dispatch_apply(CallSlot<ApplyArgs, true>& slot);
-void dispatch_snapshot(CallSlot<NoArgs, false>& slot);
-void dispatch_add_peer(CallSlot<NetworkAddr, false>& slot);
-void dispatch_remove_peer(CallSlot<NetworkAddr, false>& slot);
-void dispatch_shutdown(CallSlot<NoArgs, false>& slot);
+void dispatch_apply(api::Apply::slot_t& slot);
+void dispatch_snapshot(api::Snapshot::slot_t& slot);
+void dispatch_add_peer(api::AddPeer::slot_t& slot);
+void dispatch_remove_peer(api::RemovePeer::slot_t& slot);
+void dispatch_shutdown(api::Shutdown::slot_t& slot);
 void run_worker();
 
 const static uint32_t N_WORKERS = 4;
@@ -60,20 +60,20 @@ void run_worker()
         assert(slot->state == raft::CallState::Pending);
 
         switch (tag) {
-        case CallTag::Apply:
-            dispatch_apply((CallSlot<ApplyArgs, true>&) *slot);
+        case api::Apply::tag:
+            dispatch_apply((api::Apply::slot_t&) *slot);
             break;
         case CallTag::Snapshot:
-            dispatch_snapshot((CallSlot<NoArgs, false>&) *slot);
+            dispatch_snapshot((api::Snapshot::slot_t&) *slot);
             break;
         case CallTag::AddPeer:
-            dispatch_add_peer((CallSlot<NetworkAddr, false>&) *slot);
+            dispatch_add_peer((api::AddPeer::slot_t&) *slot);
             break;
         case CallTag::RemovePeer:
-            dispatch_remove_peer((CallSlot<NetworkAddr, false>&) *slot);
+            dispatch_remove_peer((api::RemovePeer::slot_t&) *slot);
             break;
         case CallTag::Shutdown:
-            dispatch_shutdown((CallSlot<NoArgs, false>&) *slot);
+            dispatch_shutdown((api::Shutdown::slot_t&) *slot);
             break;
         default:
             zlog_fatal(go_cat, "Unhandled call type: %d",
@@ -92,9 +92,9 @@ uintptr_t shm_offset(void* ptr)
     return address - shm_base;
 }
 
-void dispatch_apply(CallSlot<ApplyArgs, true>& slot)
+void dispatch_apply(api::Apply::slot_t& slot)
 {
-    assert(slot.tag == CallTag::Apply);
+    assert(slot.tag == api::Apply::tag);
     
     size_t cmd_offset = shm_offset(slot.args.cmd_buf.get());
 
@@ -102,26 +102,26 @@ void dispatch_apply(CallSlot<ApplyArgs, true>& slot)
     RaftApply(&slot, cmd_offset, slot.args.cmd_len, slot.args.timeout_ns);
 }
 
-void dispatch_snapshot(CallSlot<NoArgs, false>& slot)
+void dispatch_snapshot(api::Snapshot::slot_t& slot)
 {
     assert(slot.tag == CallTag::Snapshot);
     slot.timings.record("API call to Go");
     RaftSnapshot(&slot);
 }
 
-void dispatch_add_peer(CallSlot<NetworkAddr, false>& slot)
+void dispatch_add_peer(api::AddPeer::slot_t& slot)
 {
     assert(slot.tag == CallTag::AddPeer);
     RaftAddPeer(&slot, slot.args.host, slot.args.port);
 }
 
-void dispatch_remove_peer(CallSlot<NetworkAddr, false>& slot)
+void dispatch_remove_peer(api::RemovePeer::slot_t& slot)
 {
     assert(slot.tag == CallTag::RemovePeer);
     RaftRemovePeer(&slot, slot.args.host, slot.args.port);
 }
 
-void dispatch_shutdown(CallSlot<NoArgs, false>& slot)
+void dispatch_shutdown(api::Shutdown::slot_t& slot)
 {
     assert(slot.tag == CallTag::Shutdown);
     RaftShutdown(&slot);
