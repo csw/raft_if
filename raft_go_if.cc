@@ -175,7 +175,6 @@ void raft_reply_apply(raft_call call_p, uint64_t retval, RaftError error)
 uint64_t raft_fsm_apply(uint64_t index, uint64_t term, RaftLogType type,
                         char* cmd_buf, size_t cmd_len)
 {
-    auto start_t = Timings::clock::now();
     shm_handle cmd_handle;
     char* shm_buf = nullptr;
 
@@ -189,17 +188,9 @@ uint64_t raft_fsm_apply(uint64_t index, uint64_t term, RaftLogType type,
         memcpy(shm_buf, cmd_buf, cmd_len);
         cmd_handle = raft::shm.get_handle_from_address(shm_buf);
     }
-    auto cmd_buf_t = Timings::clock::now();
 
-    auto* slot = shm.construct< CallSlot<LogEntry, true> >(anonymous_instance)
-        (CallTag::FSMApply, index, term, type, cmd_handle, cmd_len);
-    slot->timings = Timings(start_t);
-    slot->timings.record("command buffer ready", cmd_buf_t);
-    slot->timings.record("slot ready");
-    auto rec = slot->rec();
-    zlog_debug(go_cat, "Issuing FSMApply, tag %d.", rec.first);
-    scoreboard->fsm_queue.put(slot->rec());
-
+    auto* slot =
+        send_fsm_request<api::FSMApply>(index, term, type, cmd_handle, cmd_len);
     slot->wait();
 
     assert(slot->state == raft::CallState::Success);
@@ -220,11 +211,10 @@ uint64_t raft_fsm_apply(uint64_t index, uint64_t term, RaftLogType type,
 
 int raft_fsm_snapshot(char *path)
 {
-    auto* slot = shm.construct< CallSlot<Filename, true> >(anonymous_instance)
-        (CallTag::FSMSnapshot, path);
+    auto* slot = send_fsm_request<api::FSMSnapshot>(path);
     free(path);
-    scoreboard->fsm_queue.put(slot->rec());
     slot->wait();
+
     assert(is_terminal(slot->state));
     int retval = (slot->state == raft::CallState::Success) ? 0 : 1;
     slot->dispose();
@@ -233,12 +223,11 @@ int raft_fsm_snapshot(char *path)
 
 int raft_fsm_restore(char *path)
 {
-    auto* slot = shm.construct< CallSlot<Filename, true> >(anonymous_instance)
-        (CallTag::FSMRestore, path);
+    auto* slot = send_fsm_request<api::FSMRestore>(path);
     free(path);
-    scoreboard->fsm_queue.put(slot->rec());
     zlog_info(go_cat, "Sent restore request to FSM.");
     slot->wait();
+
     assert(is_terminal(slot->state));
     int retval = (slot->state == raft::CallState::Success) ? 0 : 1;
     slot->dispose();
