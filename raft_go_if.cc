@@ -106,41 +106,47 @@ void dispatch_apply(api::Apply::slot_t& slot)
     
     size_t cmd_offset = shm_offset(slot.args.cmd_buf.get());
 
+    slot.state = raft::CallState::Dispatched;
     RaftApply(&slot, cmd_offset, slot.args.cmd_len, slot.args.timeout_ns);
 }
 
 void dispatch_barrier(api::Barrier::slot_t& slot)
 {
+    slot.state = raft::CallState::Dispatched;
     RaftBarrier(&slot, slot.args.timeout_ns);
 }
 
 void dispatch_verify_leader(api::VerifyLeader::slot_t& slot)
 {
+    slot.state = raft::CallState::Dispatched;
     RaftVerifyLeader(&slot);
 }
 
 void dispatch_snapshot(api::Snapshot::slot_t& slot)
 {
     assert(slot.tag == CallTag::Snapshot);
-    slot.timings.record("API call to Go");
+    slot.state = raft::CallState::Dispatched;
     RaftSnapshot(&slot);
 }
 
 void dispatch_add_peer(api::AddPeer::slot_t& slot)
 {
     assert(slot.tag == CallTag::AddPeer);
+    slot.state = raft::CallState::Dispatched;
     RaftAddPeer(&slot, (char*) slot.args.host, slot.args.port);
 }
 
 void dispatch_remove_peer(api::RemovePeer::slot_t& slot)
 {
     assert(slot.tag == CallTag::RemovePeer);
+    slot.state = raft::CallState::Dispatched;
     RaftRemovePeer(&slot, (char*) slot.args.host, slot.args.port);
 }
 
 void dispatch_shutdown(api::Shutdown::slot_t& slot)
 {
     assert(slot.tag == CallTag::Shutdown);
+    slot.state = raft::CallState::Dispatched;
     RaftShutdown(&slot);
 }
 

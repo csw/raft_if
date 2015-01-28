@@ -1,4 +1,4 @@
-package raft_if
+package main
 
 import (
 	// #cgo CXXFLAGS: -std=c++11 -Wall -Werror -Wextra -pedantic
@@ -119,10 +119,14 @@ func main() {
 	}
 
 	C.raft_ready()
+	lg.Println("Raft is ready.")
 
-	for {
-		time.Sleep(5*time.Second)
+	for raft.State().String() != "Shutdown" {
+		time.Sleep(1*time.Second)
 	}
+	// XXX: race with shutdown handler thread etc.
+	time.Sleep(2*time.Second)
+	lg.Println("raft_if exiting.")
 }
 
 func DummyServices() (*RaftServices, error) {
@@ -252,6 +256,7 @@ func OnParentExit() {
 
 func SendReply(call C.raft_call, future raft.Future) {
 	if future.Error() == nil {
+		lg.Println("Sending success reply.")
 		C.raft_reply(call, C.RAFT_SUCCESS)
 	} else {
 		lg.Printf("Command failed: %v\n", future.Error())
