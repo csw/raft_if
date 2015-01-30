@@ -14,6 +14,7 @@ extern "C" {
 using namespace raft;
 
 using boost::interprocess::anonymous_instance;
+using boost::interprocess::unique_instance;
 
 namespace {
 
@@ -166,10 +167,12 @@ void raft_reply_apply(raft_call call_p, uint64_t retval, RaftError error)
     mutex_lock lock(slot->owned);
     slot->timings.record("RaftApply return");
     assert(slot->tag == CallTag::Apply);
-    if (!error)
+    if (!error) {
         slot->reply(retval);
-    else
+    } else {
+        zlog_error(go_cat, "Sending error response from RaftApply: %d", error);
         slot->reply(error);
+    }
 }
 
 uint64_t raft_fsm_apply(uint64_t index, uint64_t term, RaftLogType type,
@@ -241,9 +244,10 @@ void raft_set_leader(bool val)
     raft::scoreboard->is_leader = val;
 }
 
-void* raft_shm_init()
+void* raft_shm_init(const char *shm_path)
 {
-    raft::shm_init("raft", false, nullptr);
+    raft::shm_init(shm_path, false, nullptr);
+    free((void*) shm_path);
     go_cat = zlog_get_category("raft_go");
     return raft::shm.get_address();
 }
@@ -251,4 +255,9 @@ void* raft_shm_init()
 size_t raft_shm_size()
 {
     return raft::shm.get_size();
+}
+
+RaftConfig* raft_get_config()
+{
+    return raft::shm.find<RaftConfig>(unique_instance).first;
 }

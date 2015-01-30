@@ -16,8 +16,10 @@ extern "C" {
 
 typedef void* raft_call;
 
-void* raft_shm_init();
+void* raft_shm_init(const char *shm_path);
 size_t raft_shm_size();
+
+RaftConfig* raft_get_config();
 
 void raft_ready();
 

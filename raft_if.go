@@ -53,16 +53,13 @@ func main() {
 	ppid := os.Getppid()
 	lg = log.New(os.Stderr, fmt.Sprintf("raft_if [%d] ", pid), log.LstdFlags)
 
-	dir := flag.String("dir", "", "State directory")
-	port := flag.Int("port", 9001, "Raft port to listen on")
-	single := flag.Bool("single", false, "Run in single-node mode")
-	peers_s := flag.String("peers", "", "Static list of peers")
+	shm_path := flag.String("shm", "/tmp/raft_shm", "Shared memory")
 	flag.Parse()
 
 	lg.Printf("Starting Raft service for parent PID %d.\n", ppid)
 	lg.Println("Initializing Raft shared memory.")
 
-	nshm, err := ShmInit()
+	nshm, err := ShmInit(*shm_path)
 	if (err != nil) {
 		lg.Panicln("Failed to initialize shared memory!")
 	}
@@ -70,17 +67,20 @@ func main() {
 	lg.Printf("Shared memory initialized.\n")
 	go WatchParent(ppid)
 
-	conf := raft.DefaultConfig()
-	conf.EnableSingleNode = *single
-	lg.Printf("Single node: %v\n", conf.EnableSingleNode)
+	shared_conf := C.raft_get_config()
+	conf  := CopyConfig(shared_conf)
+	dir   := C.GoString(&shared_conf.base_dir[0])
+	port  := uint16(shared_conf.listen_port)
+	peers_s := C.GoString(&shared_conf.peers[0])
+
 	fsm := &RemoteFSM{}
 
 	var svcs *RaftServices
 	var peers raft.PeerStore
 
-	if *dir != "" {
-		lg.Printf("Setting up standard Raft services in %s.\n", *dir)
-		svcs, err = StdServices(*dir)
+	if dir != "" {
+		lg.Printf("Setting up standard Raft services in %s.\n", dir)
+		svcs, err = StdServices(dir)
 	} else {
 		lg.Println("Setting up dummy Raft services.")
 		svcs, err = DummyServices()
@@ -89,22 +89,22 @@ func main() {
 		lg.Fatalf("Failed to initialize Raft base services: %v\n", err)
 	}
 
-	bindAddr := fmt.Sprintf("127.0.0.1:%d", *port)
+	bindAddr := fmt.Sprintf("127.0.0.1:%d", port)
 	lg.Printf("Binding to %s.\n", bindAddr)
 	trans, err := raft.NewTCPTransport(bindAddr, nil, 16, 0, nil)
 	if err != nil {
 		lg.Panicf("Binding to %s failed: %v", bindAddr, err)
 	}
 
-	if (*peers_s != "" || *dir == "") {
-		lg.Printf("Setting up static peers: %s\n", *peers_s)
-		peers, err = StaticPeers(*peers_s)
+	if (peers_s != "" || dir == "") {
+		lg.Printf("Setting up static peers: %s\n", peers_s)
+		peers, err = StaticPeers(peers_s)
 		if err != nil {
 			lg.Fatalf("Failed to initialize peer set: %v\n", err)
 		}
 	} else {
-		lg.Printf("Setting up JSON peers in %s.\n", *dir)
-		peers = raft.NewJSONPeers(*dir, trans)
+		lg.Printf("Setting up JSON peers in %s.\n", dir)
+		peers = raft.NewJSONPeers(dir, trans)
 	}
 
 	raft, err := raft.NewRaft(conf, fsm,
@@ -127,6 +127,27 @@ func main() {
 	// XXX: race with shutdown handler thread etc.
 	time.Sleep(2*time.Second)
 	lg.Println("raft_if exiting.")
+}
+
+func CopyConfig(uc *C.RaftConfig) *raft.Config {
+	rc := raft.DefaultConfig()
+
+	rc.HeartbeatTimeout = time.Duration(uc.HeartbeatTimeout)
+	rc.ElectionTimeout = time.Duration(uc.ElectionTimeout)
+	rc.CommitTimeout = time.Duration(uc.CommitTimeout)
+
+	rc.MaxAppendEntries = int(uc.MaxAppendEntries)
+	rc.ShutdownOnRemove = bool(uc.ShutdownOnRemove)
+	rc.DisableBootstrapAfterElect = bool(uc.DisableBootstrapAfterElect)
+	rc.TrailingLogs = uint64(uc.TrailingLogs)
+	rc.SnapshotInterval = time.Duration(uc.SnapshotInterval)
+	rc.SnapshotThreshold = uint64(uc.SnapshotThreshold)
+	rc.EnableSingleNode = bool(uc.EnableSingleNode)
+	rc.LeaderLeaseTimeout = time.Duration(uc.LeaderLeaseTimeout)
+
+	//logOutput := C.GoString(&uc.LogOutput[0])
+	// TODO: set this up appropriately
+	return rc
 }
 
 func DummyServices() (*RaftServices, error) {
@@ -218,8 +239,8 @@ func ReportLeaderStatus() {
 	}
 }
 
-func ShmInit() (Shm, error) {
-	shared_base := C.raft_shm_init()
+func ShmInit(path string) (Shm, error) {
+	shared_base := C.raft_shm_init(C.CString(path))
 	if shared_base == nil {
 		lg.Panicf("Failed to allocate shared memory!")
 	}
