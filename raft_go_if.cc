@@ -1,4 +1,5 @@
 #include <chrono>
+#include <cinttypes>
 #include <cstdio>
 #include <unistd.h>
 #include <thread>
@@ -198,7 +199,7 @@ uint64_t raft_fsm_apply(uint64_t index, uint64_t term, RaftLogType type,
 
     assert(slot->state == raft::CallState::Success);
     assert(slot->error == RAFT_SUCCESS);
-    zlog_debug(go_cat, "FSM response %#llx", slot->retval);
+    zlog_debug(go_cat, "FSM response %#" PRIx64 , slot->retval);
 
     if (shm_buf)
         shm.deallocate(shm_buf);
