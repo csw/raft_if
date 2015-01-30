@@ -243,7 +243,7 @@ void raft_set_leader(bool val)
 
 void* raft_shm_init()
 {
-    raft::shm_init("raft", false);
+    raft::shm_init("raft", false, nullptr);
     go_cat = zlog_get_category("raft_go");
     return raft::shm.get_address();
 }
