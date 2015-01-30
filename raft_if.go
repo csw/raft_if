@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
-	"log"
 	"math/big"
 	"net"
 	"os"
@@ -24,6 +23,7 @@ import (
 	"unsafe"
 	"github.com/hashicorp/raft"
 	"github.com/hashicorp/raft-mdb"
+	"github.com/op/go-logging"
 )
 
 // lifted from http://bazaar.launchpad.net/~niemeyer/gommap/trunk/view/head:/gommap.go
@@ -33,7 +33,9 @@ var (
 
 	ri *raft.Raft
 	shm Shm
-	lg *log.Logger
+	log *logging.Logger
+
+	logFormat = "%{color}%{time:2006-01-02 15:04:05} %{level:.5s} %{module} [%{pid}]%{color:reset} %{message}"
 
 	ErrFileExists = errors.New("file exists")
 	ErrSnapshot = errors.New("snapshot failed")
@@ -49,22 +51,26 @@ type RaftServices struct {
 func main() {
 	var err error
 
-	pid  := os.Getpid()
 	ppid := os.Getppid()
-	lg = log.New(os.Stderr, fmt.Sprintf("raft_if [%d] ", pid), log.LstdFlags)
-
+	
+	backend := logging.NewLogBackend(os.Stderr, "", 0)
+	logging.SetBackend(backend)
+	logging.SetFormatter(logging.MustStringFormatter(logFormat))
+	log = logging.MustGetLogger("raft_if")
+	logging.SetLevel(logging.INFO, "raft_if")
+	
 	shm_path := flag.String("shm", "/tmp/raft_shm", "Shared memory")
 	flag.Parse()
 
-	lg.Printf("Starting Raft service for parent PID %d.\n", ppid)
-	lg.Println("Initializing Raft shared memory.")
+	log.Info("Starting Raft service for parent PID %d.", ppid)
+	log.Debug("Initializing Raft shared memory.")
 
 	nshm, err := ShmInit(*shm_path)
 	if (err != nil) {
-		lg.Panicln("Failed to initialize shared memory!")
+		log.Panic("Failed to initialize shared memory!")
 	}
 	shm = nshm
-	lg.Printf("Shared memory initialized.\n")
+	log.Debug("Shared memory initialized.")
 	go WatchParent(ppid)
 
 	shared_conf := C.raft_get_config()
@@ -79,54 +85,54 @@ func main() {
 	var peers raft.PeerStore
 
 	if dir != "" {
-		lg.Printf("Setting up standard Raft services in %s.\n", dir)
+		log.Info("Setting up standard Raft services in %s.", dir)
 		svcs, err = StdServices(dir)
 	} else {
-		lg.Println("Setting up dummy Raft services.")
+		log.Info("Setting up dummy Raft services.")
 		svcs, err = DummyServices()
 	}
 	if err != nil {
-		lg.Fatalf("Failed to initialize Raft base services: %v\n", err)
+		log.Fatalf("Failed to initialize Raft base services: %v", err)
 	}
 
 	bindAddr := fmt.Sprintf("127.0.0.1:%d", port)
-	lg.Printf("Binding to %s.\n", bindAddr)
+	log.Info("Binding to %s.", bindAddr)
 	trans, err := raft.NewTCPTransport(bindAddr, nil, 16, 0, nil)
 	if err != nil {
-		lg.Panicf("Binding to %s failed: %v", bindAddr, err)
+		log.Panicf("Binding to %s failed: %v", bindAddr, err)
 	}
 
 	if (peers_s != "" || dir == "") {
-		lg.Printf("Setting up static peers: %s\n", peers_s)
+		log.Info("Setting up static peers: %s", peers_s)
 		peers, err = StaticPeers(peers_s)
 		if err != nil {
-			lg.Fatalf("Failed to initialize peer set: %v\n", err)
+			log.Fatalf("Failed to initialize peer set: %v", err)
 		}
 	} else {
-		lg.Printf("Setting up JSON peers in %s.\n", dir)
+		log.Info("Setting up JSON peers in %s.", dir)
 		peers = raft.NewJSONPeers(dir, trans)
 	}
 
 	raft, err := raft.NewRaft(conf, fsm,
 		svcs.logs, svcs.stable, svcs.snaps, peers, trans)
 	if (err != nil) {
-		lg.Panicf("Failed to create Raft instance: %v", err)
+		log.Panicf("Failed to create Raft instance: %v", err)
 	}
 
 	ri = raft
 	if StartWorkers() != nil {
-		lg.Panicf("Failed to start workers: %v", err)
+		log.Panicf("Failed to start workers: %v", err)
 	}
 
 	C.raft_ready()
-	lg.Println("Raft is ready.")
+	log.Info("Raft is ready.")
 
 	for raft.State().String() != "Shutdown" {
 		time.Sleep(1*time.Second)
 	}
 	// XXX: race with shutdown handler thread etc.
 	time.Sleep(2*time.Second)
-	lg.Println("raft_if exiting.")
+	log.Info("raft_if exiting.")
 }
 
 func CopyConfig(uc *C.RaftConfig) *raft.Config {
@@ -159,7 +165,7 @@ func DummyServices() (*RaftServices, error) {
 	}
 	snapStore, err := raft.NewFileSnapshotStore(snapDir, 1, os.Stderr)
 	if (err != nil) {
-		lg.Panicf("Creating snapshot store in %s failed: %v",
+		log.Panicf("Creating snapshot store in %s failed: %v",
 			snapDir, err)
 	}
 	return &RaftServices{ logStore, stableStore, snapStore }, nil
@@ -173,13 +179,13 @@ func StdServices(base string) (*RaftServices, error) {
 
 	mdbStore, err := raftmdb.NewMDBStore(base)
 	if err != nil {
-		lg.Printf("Creating MDBStore for %s failed: %v\n", base, err)
+		log.Error("Creating MDBStore for %s failed: %v\n", base, err)
 		return nil, err
 	}
 	// TODO: knobs for snapshot retention etc
 	snapStore, err := raft.NewFileSnapshotStore(base, 1, os.Stderr)
 	if err != nil {
-		lg.Printf("Creating FileSnapshotStore for %s failed: %v\n",
+		log.Error("Creating FileSnapshotStore for %s failed: %v\n",
 			base, err)
 		return nil, err
 	}
@@ -200,7 +206,7 @@ func MkdirIfNeeded(path string) error {
 		if err == nil {
 			return nil
 		} else {
-			lg.Printf("Failed to create Raft dir %s: %v", path, err)
+			log.Error("Failed to create Raft dir %s: %v", path, err)
 			return err
 		}
 	} else {
@@ -217,12 +223,12 @@ func StaticPeers(peers_s string) (raft.PeerStore, error) {
 		if len(peer) == 0 { continue; }
 		addr, err := net.ResolveTCPAddr("tcp", peer)
 		if err != nil {
-			lg.Panicf("Failed to parse address %s", peer)
+			log.Panicf("Failed to parse address %s", peer)
 		}
 		
 		peerAddrs = append(peerAddrs, addr)
 	}
-	lg.Printf("Static peers: %v\n", peerAddrs)
+	log.Debug("Static peers: %v", peerAddrs)
 	return &raft.StaticPeers{ StaticPeers: peerAddrs }, nil
 }
 
@@ -242,7 +248,7 @@ func ReportLeaderStatus() {
 func ShmInit(path string) (Shm, error) {
 	shared_base := C.raft_shm_init(C.CString(path))
 	if shared_base == nil {
-		lg.Panicf("Failed to allocate shared memory!")
+		log.Panicf("Failed to allocate shared memory!")
 	}
 
 	shared_len := C.raft_shm_size()
@@ -258,7 +264,7 @@ func WatchParent(ppid int) {
 	for {
 		err := syscall.Kill(ppid, 0)
 		if (err != nil) {
-			lg.Printf("Parent process %d has exited!\n", ppid)
+			log.Error("Parent process %d has exited!", ppid)
 			OnParentExit()
 		}
 		time.Sleep(1*time.Second)
@@ -267,20 +273,20 @@ func WatchParent(ppid int) {
 
 func OnParentExit() {
 	future := ri.Shutdown()
-	lg.Println("Waiting for Raft to shut down...");
+	log.Info("Waiting for Raft to shut down...");
 	if (future.Error() != nil) {
-		lg.Fatalf("Error during shutdown: %v\n")
+		log.Fatalf("Error during shutdown: %v", future.Error())
 	} else {
-		lg.Fatalln("Shutdown due to parent exit complete.")
+		log.Fatal("Shutdown due to parent exit complete.")
 	}
 }
 
 func SendReply(call C.raft_call, future raft.Future) {
 	if future.Error() == nil {
-		lg.Println("Sending success reply.")
+		log.Debug("Sending success reply.")
 		C.raft_reply(call, C.RAFT_SUCCESS)
 	} else {
-		lg.Printf("Command failed: %v\n", future.Error())
+		log.Warning("Command failed: %v", future.Error())
 		C.raft_reply(call, TranslateRaftError(future.Error()))
 	}
 }
@@ -290,7 +296,7 @@ func SendApplyReply(call C.raft_call, future raft.ApplyFuture) {
 		response := future.Response()
 		C.raft_reply_apply(call, response.(C.uint64_t), C.RAFT_SUCCESS)
 	} else {
-		lg.Printf("Command failed: %v\n", future.Error())
+		log.Warning("Command failed: %v", future.Error())
 		C.raft_reply_apply(call, 0, TranslateRaftError(future.Error()))
 	}
 }
@@ -324,7 +330,7 @@ func RaftVerifyLeader(call C.raft_call) {
 
 //export RaftSnapshot
 func RaftSnapshot(call C.raft_call) {
-	lg.Println("Received snapshot API request.")
+	log.Debug("Received snapshot API request.")
 	future := ri.Snapshot()
 	go SendReply(call, future)
 }
@@ -338,7 +344,7 @@ func RaftAddPeer(call C.raft_call, host *C.char, port C.uint16_t) {
 		future := ri.AddPeer(addr)
 		go SendReply(call, future)
 	} else {
-		lg.Printf("Failed to resolve peer address %s: %v\n",
+		log.Error("Failed to resolve peer address %s: %v",
 			addr_s, err)
 		C.raft_reply(call, C.RAFT_E_OTHER)
 	}
@@ -353,7 +359,7 @@ func RaftRemovePeer(call C.raft_call, host *C.char, port C.uint16_t) {
 		future := ri.RemovePeer(addr)
 		go SendReply(call, future)
 	} else {
-		lg.Printf("Failed to resolve peer address %s: %v\n",
+		log.Error("Failed to resolve peer address %s: %v",
 			addr_s, err)
 		C.raft_reply(call, C.RAFT_E_OTHER)
 	}
@@ -361,9 +367,9 @@ func RaftRemovePeer(call C.raft_call, host *C.char, port C.uint16_t) {
 
 //export RaftShutdown
 func RaftShutdown(call C.raft_call) {
-	lg.Println("Requesting Raft shutdown.")
+	log.Info("Requesting Raft shutdown.")
 	future := ri.Shutdown()
-	lg.Println("Waiting for Raft to shut down...");
+	log.Debug("Waiting for Raft to shut down...");
 	go SendReply(call, future)
 }
 
@@ -394,59 +400,59 @@ type PipeSnapshot struct {
 	complete chan bool
 }
 
-func (m *RemoteFSM) Apply(log *raft.Log) interface{} {
+func (m *RemoteFSM) Apply(rlog *raft.Log) interface{} {
 	var c_type C.RaftLogType
 	var cmd_buf *C.char
 	var cmd_len C.size_t
 
 	//fmt.Printf("[DEBUG] Applying command to C FSM: %q\n", log.Data)
 
-	switch log.Type {
-	case raft.LogCommand: c_type = C.RAFT_LOG_COMMAND
-	case raft.LogNoop: c_type = C.RAFT_LOG_NOOP
-	case raft.LogAddPeer: c_type = C.RAFT_LOG_ADD_PEER
+	switch rlog.Type {
+	case raft.LogCommand:    c_type = C.RAFT_LOG_COMMAND
+	case raft.LogNoop:       c_type = C.RAFT_LOG_NOOP
+	case raft.LogAddPeer:    c_type = C.RAFT_LOG_ADD_PEER
 	case raft.LogRemovePeer: c_type = C.RAFT_LOG_REMOVE_PEER
-	case raft.LogBarrier: c_type = C.RAFT_LOG_BARRIER
+	case raft.LogBarrier:    c_type = C.RAFT_LOG_BARRIER
 	default:
-		lg.Panicln("Unhandled log type!")
+		log.Panic("Unhandled log type!")
 	}
-	dh := (*reflect.SliceHeader)(unsafe.Pointer(&log.Data))
+	dh := (*reflect.SliceHeader)(unsafe.Pointer(&rlog.Data))
 	cmd_buf = (*C.char)(unsafe.Pointer(dh.Data))
 	cmd_len = C.size_t(dh.Len)
 	
-	rv := C.raft_fsm_apply(C.uint64_t(log.Index), C.uint64_t(log.Term), c_type, cmd_buf, cmd_len);
+	rv := C.raft_fsm_apply(C.uint64_t(rlog.Index), C.uint64_t(rlog.Term), c_type, cmd_buf, cmd_len);
 
 	return rv
 }
 
 func (m *RemoteFSM) Snapshot() (raft.FSMSnapshot, error) {
-	lg.Println("=== FSM snapshot requested ===");
+	log.Debug("=== FSM snapshot requested ===");
 	path, err := MakeFIFO()
 	if err == nil {
 		snap := PipeSnapshot{ path, make(chan bool) }
 		go StartSnapshot(&snap)
 		return &snap, nil
 	} else {
-		lg.Printf("Failed to create snapshot FIFO %s: %v", path, err)
+		log.Error("Failed to create snapshot FIFO %s: %v", path, err)
 		return nil, err
 	} 
 }
 
 func (m *RemoteFSM) Restore(inp io.ReadCloser) error {
 	defer inp.Close()
-	lg.Println("=== FSM restore requested ===");
+	log.Debug("=== FSM restore requested ===");
 	path, err := MakeFIFO()
 	if err != nil { return err }
 	status := make(chan bool)
 	go StartRestore(path, inp, status)
-	lg.Printf("Sending restore request to FSM.\n")
+	log.Debug("Sending restore request to FSM.")
 	fsm_result := C.raft_fsm_restore(C.CString(path))
 	pipe_result := <- status
 	if (fsm_result == 0) && pipe_result {
-		lg.Println("Restore succeeded.")
+		log.Info("Restore succeeded.")
 		return nil
 	} else {
-		lg.Println("Restore failed.")
+		log.Error("Restore failed.")
 		return ErrRestore
 	}
 }
@@ -454,7 +460,7 @@ func (m *RemoteFSM) Restore(inp io.ReadCloser) error {
 func MakeFIFO() (string, error) {
 	random, err := rand.Int(rand.Reader, big.NewInt(1<<32))
 	if err != nil {
-		lg.Printf("Failed to obtain random number: %v\n", err)
+		log.Error("Failed to obtain random number: %v", err)
 		return "", err
 	}
 	path := fmt.Sprintf("/tmp/fsm_snap_%d", random)
@@ -462,7 +468,7 @@ func MakeFIFO() (string, error) {
 	if err == nil {
 		return path, nil
 	} else {
-		lg.Printf("mkfifo failed for %s: %v\n", path, err)
+		log.Error("mkfifo failed for %s: %v", path, err)
 		return "", err
 	}
 }
@@ -474,17 +480,17 @@ func StartSnapshot(snap *PipeSnapshot) {
 }
 
 func StartRestore(fifo string, source io.ReadCloser, status chan bool) {
-	lg.Printf("Opening FIFO %s for restore...\n", fifo)
+	log.Debug("Opening FIFO %s for restore...", fifo)
 	sink, err := os.OpenFile(fifo, os.O_WRONLY, 0000)
 	if err != nil {
-		lg.Printf("Failed to open FIFO %s: %v\n", fifo, err)
+		log.Error("Failed to open FIFO %s: %v", fifo, err)
 		status <- false
 		return
 	}
 	defer sink.Close()
 	err = os.Remove(fifo)
 	if err != nil {
-		lg.Printf("Failed to remove FIFO %s: %v\n", fifo, err)
+		log.Debug("Failed to remove FIFO %s: %v", fifo, err)
 		status <- false
 		return
 	}
@@ -492,7 +498,7 @@ func StartRestore(fifo string, source io.ReadCloser, status chan bool) {
 	n_read, err := io.Copy(sink, source)
 	if err == nil {
 		if err = sink.Close(); err == nil {
-			lg.Printf("Wrote snapshot for restore, %d bytes.\n", n_read)
+			log.Debug("Wrote snapshot for restore, %d bytes.", n_read)
 			status <- true
 			return
 		}
@@ -510,7 +516,7 @@ func (p *PipeSnapshot) Persist(sink raft.SnapshotSink) error {
 	defer source.Close()
 	err = os.Remove(p.path)
 	if err != nil {
-		lg.Printf("Failed to remove FIFO: %v\n", err)
+		log.Error("Failed to remove FIFO: %v", err)
 		return err
 	}
 
@@ -519,13 +525,13 @@ func (p *PipeSnapshot) Persist(sink raft.SnapshotSink) error {
 		switch <- p.complete {
 		case true:
 			sink.Close()
-			lg.Printf("Snapshot succeeded, %d bytes.\n", written)
+			log.Debug("Snapshot succeeded, %d bytes.", written)
 			return nil
 		case false:
 			sink.Cancel()
 			return ErrSnapshot
 		default:
-			lg.Panicf("should never happen")
+			log.Panicf("should never happen")
 			return ErrSnapshot // not reached
 		}
 	} else {
