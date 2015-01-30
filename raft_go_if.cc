@@ -49,7 +49,7 @@ namespace {
 
 void run_worker()
 {
-    fprintf(stderr, "Starting worker.\n");
+    zlog_debug(go_cat, "Starting worker.");
     for (;;) {
         auto rec = scoreboard->api_queue.take();
         auto recv_ts = Timings::clock::now();
