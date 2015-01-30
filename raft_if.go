@@ -285,7 +285,6 @@ func SendApplyReply(call C.raft_call, future raft.ApplyFuture) {
 func RaftApply(call C.raft_call, cmd_offset uintptr, cmd_len uintptr,
 	timeout_ns uint64) {
 	cmd := shm[cmd_offset:cmd_offset+cmd_len]
-	// XXX: check duration conversion
 	future := ri.Apply(cmd, time.Duration(timeout_ns))
 	go SendApplyReply(call, future);
 }
