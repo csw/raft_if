@@ -1,8 +1,8 @@
 package main
 
 import (
-	// #cgo CXXFLAGS: -std=c++11 -stdlib=libc++
-	// #cgo CXXFLAGS: -Wall -Werror -Wextra -pedantic
+	// #cgo CXXFLAGS: -std=c++11
+	// #cgo CXXFLAGS: -Wall -Werror -Wextra
 	// #cgo CXXFLAGS: -Wconversion -Wno-variadic-macros
 	// #cgo CXXFLAGS: -Wno-gnu-zero-variadic-macro-arguments
 	// #include "raft_go_if.h"
