@@ -49,6 +49,12 @@ type RaftServices struct {
 }
 
 func main() {
+	shmPath := flag.String("shm-path", "/tmp/raft_shm", "Shared memory path")
+	flag.Parse()
+	Start(*shmPath)
+}
+
+func Start(shmPath string) {
 	var err error
 
 	ppid := os.Getppid()
@@ -59,13 +65,10 @@ func main() {
 	log = logging.MustGetLogger("raft_if")
 	logging.SetLevel(logging.INFO, "raft_if")
 	
-	shm_path := flag.String("shm", "/tmp/raft_shm", "Shared memory")
-	flag.Parse()
-
 	log.Info("Starting Raft service for parent PID %d.", ppid)
 	log.Debug("Initializing Raft shared memory.")
 
-	nshm, err := ShmInit(*shm_path)
+	nshm, err := ShmInit(shmPath)
 	if (err != nil) {
 		log.Panic("Failed to initialize shared memory!")
 	}
@@ -86,7 +89,7 @@ func main() {
 
 	if dir != "" {
 		log.Info("Setting up standard Raft services in %s.", dir)
-		svcs, err = StdServices(dir)
+		svcs, err = StdServices(dir, shared_conf)
 	} else {
 		log.Info("Setting up dummy Raft services.")
 		svcs, err = DummyServices()
@@ -171,7 +174,7 @@ func DummyServices() (*RaftServices, error) {
 	return &RaftServices{ logStore, stableStore, snapStore }, nil
 }
 
-func StdServices(base string) (*RaftServices, error) {
+func StdServices(base string, cfg *C.RaftConfig) (*RaftServices, error) {
 	var err error
 	if err = MkdirIfNeeded(base); err != nil {
 		return nil, err
@@ -182,8 +185,9 @@ func StdServices(base string) (*RaftServices, error) {
 		log.Error("Creating MDBStore for %s failed: %v\n", base, err)
 		return nil, err
 	}
-	// TODO: knobs for snapshot retention etc
-	snapStore, err := raft.NewFileSnapshotStore(base, 1, os.Stderr)
+	// TODO: set log destination
+	snapStore, err :=
+		raft.NewFileSnapshotStore(base, int(cfg.RetainSnapshots), os.Stderr)
 	if err != nil {
 		log.Error("Creating FileSnapshotStore for %s failed: %v\n",
 			base, err)
