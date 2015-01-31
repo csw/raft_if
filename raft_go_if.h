@@ -27,6 +27,8 @@ void raft_set_leader(bool val);
 
 void raft_reply(raft_call call, RaftError error);
 
+void raft_reply_immed(raft_call call, RaftError error);
+
 void raft_reply_apply(raft_call call, uint64_t retval, RaftError error);
 
 uint64_t raft_fsm_apply(uint64_t index, uint64_t term, RaftLogType type,

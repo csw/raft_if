@@ -48,6 +48,8 @@ void raft_ready()
 
 namespace {
 
+void raft_reply_(BaseSlot& slot, RaftError error);
+
 void run_worker()
 {
     zlog_debug(go_cat, "Starting worker.");
@@ -158,8 +160,22 @@ void raft_reply(raft_call call_p, RaftError error)
 {
     auto* slot = (BaseSlot*) call_p;
     mutex_lock lock(slot->owned);
-    slot->timings.record("Raft call return");
-    slot->reply(error);
+    raft_reply_(*slot, error);
+}
+
+void raft_reply_immed(raft_call call_p, RaftError error)
+{
+    raft_reply_(*(BaseSlot*) call_p, error);
+}
+
+namespace {
+
+void raft_reply_(BaseSlot& slot, RaftError error)
+{
+    slot.timings.record("Raft call return");
+    slot.reply(error);
+}
+
 }
 
 void raft_reply_apply(raft_call call_p, uint64_t retval, RaftError error)

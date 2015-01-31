@@ -343,30 +343,30 @@ func RaftSnapshot(call C.raft_call) {
 //export RaftAddPeer
 func RaftAddPeer(call C.raft_call, host *C.char, port C.uint16_t) {
 	host_s := C.GoString(host)
-	addr_s := fmt.Sprintf("%s:%u", host_s, port)
+	addr_s := fmt.Sprintf("%s:%d", host_s, port)
 	addr, err := net.ResolveTCPAddr("tcp", addr_s)
-	if err != nil {
+	if err == nil {
 		future := ri.AddPeer(addr)
 		go SendReply(call, future)
 	} else {
 		log.Error("Failed to resolve peer address %s: %v",
 			addr_s, err)
-		C.raft_reply(call, C.RAFT_E_OTHER)
+		C.raft_reply_immed(call, C.RAFT_E_RESOLVE)
 	}
 }
 
 //export RaftRemovePeer
 func RaftRemovePeer(call C.raft_call, host *C.char, port C.uint16_t) {
 	host_s := C.GoString(host)
-	addr_s := fmt.Sprintf("%s:%u", host_s, port)
+	addr_s := fmt.Sprintf("%s:%d", host_s, port)
 	addr, err := net.ResolveTCPAddr("tcp", addr_s)
-	if err != nil {
+	if err == nil {
 		future := ri.RemovePeer(addr)
 		go SendReply(call, future)
 	} else {
 		log.Error("Failed to resolve peer address %s: %v",
 			addr_s, err)
-		C.raft_reply(call, C.RAFT_E_OTHER)
+		C.raft_reply_immed(call, C.RAFT_E_RESOLVE)
 	}
 }
 
