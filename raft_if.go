@@ -34,7 +34,7 @@ var (
 	shm Shm
 	log *logging.Logger
 
-	logFormat = "%{color}%{time:2006-01-02 15:04:05} %{level:.5s} %{module} [%{pid}]%{color:reset} %{message}"
+	logFormat = "%{color}%{time:2006-01-02 15:04:05} %{level:.8s} %{module} [%{pid}]%{color:reset} %{message}"
 
 	ErrFileExists = errors.New("file exists")
 	ErrSnapshot   = errors.New("snapshot failed")
