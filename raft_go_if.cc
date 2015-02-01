@@ -7,6 +7,7 @@
 
 #include "raft_go_if.h"
 #include "raft_shm.h"
+#include "queue.h"
 
 extern "C" {
 #include "_cgo_export.h"
@@ -21,6 +22,9 @@ namespace {
 
 zlog_category_t*    go_cat;
 
+void run_worker();
+void take_call();
+
 void dispatch_apply(api::Apply::slot_t& slot);
 void dispatch_barrier(api::Barrier::slot_t& slot);
 void dispatch_verify_leader(api::VerifyLeader::slot_t& slot);
@@ -28,7 +32,6 @@ void dispatch_snapshot(api::Snapshot::slot_t& slot);
 void dispatch_add_peer(api::AddPeer::slot_t& slot);
 void dispatch_remove_peer(api::RemovePeer::slot_t& slot);
 void dispatch_shutdown(api::Shutdown::slot_t& slot);
-void run_worker();
 
 const static uint32_t N_WORKERS = 4;
 
@@ -53,45 +56,55 @@ void raft_reply_(BaseSlot& slot, RaftError error);
 void run_worker()
 {
     zlog_debug(go_cat, "Starting worker.");
-    for (;;) {
-        auto rec = scoreboard->api_queue.take();
-        auto recv_ts = Timings::clock::now();
-        CallTag tag = rec.first;
-        BaseSlot::pointer slot = rec.second;
-        raft::mutex_lock l(slot->owned);
-        slot->timings.record("call received", recv_ts);
-        slot->timings.record("call locked");
-        zlog_debug(go_cat, "API call received, tag %d, call %p.",
-                   tag, slot.get());
-        assert(slot->state == raft::CallState::Pending);
-
-        switch (tag) {
-        case api::Apply::tag:
-            dispatch_apply((api::Apply::slot_t&) *slot);
-            break;
-        case api::Barrier::tag:
-            dispatch_barrier((api::Barrier::slot_t&) *slot);
-            break;
-        case api::VerifyLeader::tag:
-            dispatch_verify_leader((api::VerifyLeader::slot_t&) *slot);
-            break;
-        case CallTag::Snapshot:
-            dispatch_snapshot((api::Snapshot::slot_t&) *slot);
-            break;
-        case CallTag::AddPeer:
-            dispatch_add_peer((api::AddPeer::slot_t&) *slot);
-            break;
-        case CallTag::RemovePeer:
-            dispatch_remove_peer((api::RemovePeer::slot_t&) *slot);
-            break;
-        case CallTag::Shutdown:
-            dispatch_shutdown((api::Shutdown::slot_t&) *slot);
-            break;
-        default:
-            zlog_fatal(go_cat, "Unhandled call type: %d",
-                       tag);
-            abort();
+    try {
+        for (;;) {
+            take_call();
         }
+    } catch (queue::queue_closed&) {
+        zlog_debug(go_cat, "API queue closed, Go worker exiting.");
+        return;
+    }
+}
+
+void take_call()
+{
+    auto rec = scoreboard->api_queue.take();
+    auto recv_ts = Timings::clock::now();
+    CallTag tag = rec.first;
+    BaseSlot::pointer slot = rec.second;
+    raft::mutex_lock l(slot->owned);
+    slot->timings.record("call received", recv_ts);
+    slot->timings.record("call locked");
+    zlog_debug(go_cat, "API call received, tag %d, call %p.",
+               tag, slot.get());
+    assert(slot->state == raft::CallState::Pending);
+
+    switch (tag) {
+    case api::Apply::tag:
+        dispatch_apply((api::Apply::slot_t&) *slot);
+        break;
+    case api::Barrier::tag:
+        dispatch_barrier((api::Barrier::slot_t&) *slot);
+        break;
+    case api::VerifyLeader::tag:
+        dispatch_verify_leader((api::VerifyLeader::slot_t&) *slot);
+        break;
+    case CallTag::Snapshot:
+        dispatch_snapshot((api::Snapshot::slot_t&) *slot);
+        break;
+    case CallTag::AddPeer:
+        dispatch_add_peer((api::AddPeer::slot_t&) *slot);
+        break;
+    case CallTag::RemovePeer:
+        dispatch_remove_peer((api::RemovePeer::slot_t&) *slot);
+        break;
+    case CallTag::Shutdown:
+        dispatch_shutdown((api::Shutdown::slot_t&) *slot);
+        break;
+    default:
+        zlog_fatal(go_cat, "Unhandled call type: %d",
+                   tag);
+        abort();
     }
 }
 
