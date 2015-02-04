@@ -46,13 +46,10 @@ zlog_category_t*    go_cat;
 void run_worker();
 void take_call();
 
-void dispatch_apply(api::Apply::slot_t& slot);
-void dispatch_barrier(api::Barrier::slot_t& slot);
-void dispatch_verify_leader(api::VerifyLeader::slot_t& slot);
-void dispatch_snapshot(api::Snapshot::slot_t& slot);
-void dispatch_add_peer(api::AddPeer::slot_t& slot);
-void dispatch_remove_peer(api::RemovePeer::slot_t& slot);
-void dispatch_shutdown(api::Shutdown::slot_t& slot);
+#define api_call(name, arg_t, has_ret) \
+    void dispatch_ ## name(api::name::slot_t& slot);
+#include "raft_api_calls.h"
+#undef api_call
 
 const static uint32_t N_WORKERS = 4;
 
@@ -101,32 +98,18 @@ void take_call()
     assert(slot->state == raft::CallState::Pending);
 
     switch (tag) {
-    case api::Apply::tag:
-        dispatch_apply((api::Apply::slot_t&) *slot);
-        break;
-    case api::Barrier::tag:
-        dispatch_barrier((api::Barrier::slot_t&) *slot);
-        break;
-    case api::VerifyLeader::tag:
-        dispatch_verify_leader((api::VerifyLeader::slot_t&) *slot);
-        break;
-    case CallTag::Snapshot:
-        dispatch_snapshot((api::Snapshot::slot_t&) *slot);
-        break;
-    case CallTag::AddPeer:
-        dispatch_add_peer((api::AddPeer::slot_t&) *slot);
-        break;
-    case CallTag::RemovePeer:
-        dispatch_remove_peer((api::RemovePeer::slot_t&) *slot);
-        break;
-    case CallTag::Shutdown:
-        dispatch_shutdown((api::Shutdown::slot_t&) *slot);
-        break;
+#define api_call(name, arg_t, has_ret)                  \
+        case api::name::tag: \
+            dispatch_ ## name((api::name::slot_t&) *slot); \
+            break;
+#include "raft_api_calls.h"
+#undef api_call
     default:
         zlog_fatal(go_cat, "Unhandled call type: %d",
                    tag);
         abort();
     }
+    //slot->state = raft::CallState::Dispatched;
 }
 
 uintptr_t shm_offset(void* ptr)
@@ -138,50 +121,54 @@ uintptr_t shm_offset(void* ptr)
     return address - shm_base;
 }
 
-void dispatch_apply(api::Apply::slot_t& slot)
+void dispatch_Apply(api::Apply::slot_t& slot)
 {
     assert(slot.tag == api::Apply::tag);
     
     size_t cmd_offset = shm_offset(slot.args.cmd_buf.get());
 
-    slot.state = raft::CallState::Dispatched;
     RaftApply(&slot, cmd_offset, slot.args.cmd_len, slot.args.timeout_ns);
 }
 
-void dispatch_barrier(api::Barrier::slot_t& slot)
+void dispatch_Barrier(api::Barrier::slot_t& slot)
 {
-    slot.state = raft::CallState::Dispatched;
     RaftBarrier(&slot, slot.args.timeout_ns);
 }
 
-void dispatch_verify_leader(api::VerifyLeader::slot_t& slot)
+void dispatch_VerifyLeader(api::VerifyLeader::slot_t& slot)
 {
-    slot.state = raft::CallState::Dispatched;
     RaftVerifyLeader(&slot);
 }
 
-void dispatch_snapshot(api::Snapshot::slot_t& slot)
+void dispatch_GetState(api::GetState::slot_t& slot)
+{
+    RaftGetState(&slot);
+}
+
+void dispatch_LastContact(api::LastContact::slot_t& slot)
+{
+    RaftLastContact(&slot);
+}
+
+void dispatch_Snapshot(api::Snapshot::slot_t& slot)
 {
     assert(slot.tag == CallTag::Snapshot);
-    slot.state = raft::CallState::Dispatched;
     RaftSnapshot(&slot);
 }
 
-void dispatch_add_peer(api::AddPeer::slot_t& slot)
+void dispatch_AddPeer(api::AddPeer::slot_t& slot)
 {
     assert(slot.tag == CallTag::AddPeer);
-    slot.state = raft::CallState::Dispatched;
     RaftAddPeer(&slot, (char*) slot.args.host, slot.args.port);
 }
 
-void dispatch_remove_peer(api::RemovePeer::slot_t& slot)
+void dispatch_RemovePeer(api::RemovePeer::slot_t& slot)
 {
     assert(slot.tag == CallTag::RemovePeer);
-    slot.state = raft::CallState::Dispatched;
     RaftRemovePeer(&slot, (char*) slot.args.host, slot.args.port);
 }
 
-void dispatch_shutdown(api::Shutdown::slot_t& slot)
+void dispatch_Shutdown(api::Shutdown::slot_t& slot)
 {
     assert(slot.tag == CallTag::Shutdown);
     slot.state = raft::CallState::Dispatched;
@@ -210,6 +197,15 @@ void raft_reply_(BaseSlot& slot, RaftError error)
     slot.reply(error);
 }
 
+}
+
+void raft_reply_value(raft_call call, uint64_t retval)
+{
+    // TODO: check that this has a return value...
+    auto* slot = (BaseSlot*) call;
+    mutex_lock lock(slot->owned);
+    slot->timings.record("Raft call return");
+    slot->reply(retval);
 }
 
 void raft_reply_apply(raft_call call_p, uint64_t retval, RaftError error)
@@ -254,7 +250,7 @@ uint64_t raft_fsm_apply(uint64_t index, uint64_t term, RaftLogType type,
     if (shm_buf)
         shm.deallocate(shm_buf);
 
-    slot->timings.print();
+    //slot->timings.print();
     //fprintf(stderr, "====================\n");
 
     auto rv = slot->retval;

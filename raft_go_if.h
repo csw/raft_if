@@ -27,6 +27,8 @@ void raft_set_leader(bool val);
 
 void raft_reply(raft_call call, RaftError error);
 
+void raft_reply_value(raft_call call, uint64_t retval);
+
 void raft_reply_immed(raft_call call, RaftError error);
 
 void raft_reply_apply(raft_call call, uint64_t retval, RaftError error);

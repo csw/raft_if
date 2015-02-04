@@ -312,8 +312,7 @@ func SendReply(call C.raft_call, future raft.Future) {
 		log.Debug("Sending success reply.")
 		C.raft_reply(call, C.RAFT_SUCCESS)
 	} else {
-		log.Warning("Command failed: %v", future.Error())
-		C.raft_reply(call, TranslateRaftError(future.Error()))
+		SendErrorReply(call, future.Error())
 	}
 }
 
@@ -325,6 +324,20 @@ func SendApplyReply(call C.raft_call, future raft.ApplyFuture) {
 		log.Warning("Command failed: %v", future.Error())
 		C.raft_reply_apply(call, 0, TranslateRaftError(future.Error()))
 	}
+}
+
+func SendReplyFrom(call C.raft_call, fun func () (error, uint64)) {
+	err, value := fun()
+	if err == nil {
+		C.raft_reply_value(call, C.uint64_t(value))
+	} else {
+		SendErrorReply(call, err)
+	}
+}
+
+func SendErrorReply(call C.raft_call, err error) {
+	log.Warning("Command failed: %v", err)
+	C.raft_reply(call, TranslateRaftError(err))
 }
 
 // Interface functions
@@ -352,6 +365,34 @@ func RaftBarrier(call C.raft_call, timeout_ns uint64) {
 func RaftVerifyLeader(call C.raft_call) {
 	future := ri.VerifyLeader()
 	go SendReply(call, future)
+}
+
+//export RaftGetState
+func RaftGetState(call C.raft_call) {
+	go SendReplyFrom(call,
+		func () (error, uint64) {
+			// weird name conflicts with using the actual enum
+			switch ri.State().String() {
+			case "Follower":
+				return nil, C.RAFT_FOLLOWER
+			case "Candidate":
+				return nil, C.RAFT_CANDIDATE
+			case "Leader":
+				return nil, C.RAFT_LEADER
+			case "Shutdown":
+				return nil, C.RAFT_SHUTDOWN
+			default:
+				return nil, C.RAFT_INVALID_STATE
+			}
+		})
+}
+
+//export RaftLastContact
+func RaftLastContact(call C.raft_call) {
+	go SendReplyFrom(call,
+		func () (error, uint64) {
+			return nil, uint64(ri.LastContact().Unix())
+		})
 }
 
 //export RaftSnapshot
