@@ -11,13 +11,17 @@ extern "C" {
 #include <stdint.h>
 #include <sys/types.h>
 
+#include "zlog/src/zlog.h"
+
 // interface between Raft and the IPC layer, in C
 // See also raft_if.go.
 
 typedef void* raft_call;
 
-void* raft_shm_init(const char *shm_path);
-size_t raft_shm_size();
+extern zlog_category_t* go_cat;
+
+void*    raft_shm_init(const char *shm_path);
+size_t   raft_shm_size();
 uint64_t raft_shm_string(const char *str, size_t len);
 
 RaftConfig* raft_get_config();
