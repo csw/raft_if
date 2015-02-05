@@ -52,16 +52,19 @@ void take_call();
 #include "raft_api_calls.h"
 #undef api_call
 
-const static uint32_t N_WORKERS = 4;
-
 std::vector<std::thread> workers;
 
 }
 
 void raft_ready()
 {
-    workers.reserve(N_WORKERS);
-    for (uint32_t i = 0; i < N_WORKERS; ++i) {
+    uint32_t n_workers = raft::scoreboard->config.api_workers;
+    if (n_workers == 0) {
+        zlog_warn(go_cat, "Must run more than 0 API workers, defaulting to 4.");
+        n_workers = 4;
+    }
+    workers.reserve(n_workers);
+    for (uint32_t i = 0; i < n_workers; ++i) {
         workers.emplace_back(run_worker);
     }
     
