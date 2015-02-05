@@ -132,6 +132,12 @@ void dispatch_RemovePeer(api::RemovePeer::slot_t& slot)
     RaftRemovePeer(&slot, (char*) slot.args.host, slot.args.port);
 }
 
+void dispatch_Stats(api::Stats::slot_t& slot)
+{
+    assert(slot.tag == CallTag::Stats);
+    RaftStats(&slot);
+}
+
 void dispatch_Shutdown(api::Shutdown::slot_t& slot)
 {
     assert(slot.tag == CallTag::Shutdown);

@@ -24,6 +24,7 @@ package main
 import (
 	// #include "raft_go_if.h"
 	"C"
+	"encoding/json"
 	"fmt"
 	"github.com/hashicorp/raft"
 	"net"
@@ -91,6 +92,22 @@ func RaftLastIndex(call C.raft_call) {
 		func () (error, uint64) {
 			return nil, ri.LastIndex()
 		})
+}
+
+//export RaftStats
+func RaftStats(call C.raft_call) {
+	go SendReplyFrom(call, dumpStats);
+}
+
+func dumpStats() (error, uint64) {
+	var stats map[string]string
+	stats = ri.Stats()
+	jsonBuf, err := json.Marshal(stats)
+	if err != nil {
+		log.Error("Exporting stats as JSON failed: %v", err)
+		return err, 0
+	}
+	return nil, shmBuf(jsonBuf)
 }
 
 //export RaftGetLeader

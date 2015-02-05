@@ -106,3 +106,9 @@ func shmString(s string) uint64 {
 	cs := C.CString(s)
 	return uint64(C.raft_shm_string(cs, C.size_t(len(s))))
 }
+
+func shmBuf(buf []byte) uint64 {
+	// XXX: check that this is OK
+	cs := C.CString(string(buf))
+	return uint64(C.raft_shm_string(cs, C.size_t(len(buf)+1)))
+}
