@@ -58,7 +58,7 @@ std::vector<std::thread> workers;
 
 void raft_ready()
 {
-    uint32_t n_workers = raft::scoreboard->config.api_workers;
+    uint32_t n_workers = raft_get_config()->api_workers;
     if (n_workers == 0) {
         zlog_warn(go_cat, "Must run more than 0 API workers, defaulting to 4.");
         n_workers = 4;
