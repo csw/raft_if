@@ -329,6 +329,7 @@ func SendApplyReply(call C.raft_call, future raft.ApplyFuture) {
 func SendReplyFrom(call C.raft_call, fun func () (error, uint64)) {
 	err, value := fun()
 	if err == nil {
+		log.Debug("Sending success reply, value=%d / %#x", value, value)
 		C.raft_reply_value(call, C.uint64_t(value))
 	} else {
 		SendErrorReply(call, err)
@@ -395,6 +396,27 @@ func RaftLastContact(call C.raft_call) {
 		})
 }
 
+//export RaftLastIndex
+func RaftLastIndex(call C.raft_call) {
+	go SendReplyFrom(call,
+		func () (error, uint64) {
+			return nil, ri.LastIndex()
+		})
+}
+
+//export RaftGetLeader
+func RaftGetLeader(call C.raft_call) {
+	go SendReplyFrom(call,
+		func() (error, uint64) {
+			leader := ri.Leader()
+			if leader != nil {
+				return nil, shmString(leader.String())
+			} else {
+				return raft.ErrUnknownPeer, 0
+			}
+		})
+}
+
 //export RaftSnapshot
 func RaftSnapshot(call C.raft_call) {
 	log.Debug("Received snapshot API request.")
@@ -438,6 +460,12 @@ func RaftShutdown(call C.raft_call) {
 	future := ri.Shutdown()
 	log.Debug("Waiting for Raft to shut down...")
 	go SendReply(call, future)
+}
+
+func shmString(s string) uint64 {
+	// double copy is inefficient but safest
+	cs := C.CString(s)
+	return uint64(C.raft_shm_string(cs, C.size_t(len(s))))
 }
 
 //export TranslateRaftError

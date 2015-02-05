@@ -18,6 +18,7 @@ typedef void* raft_call;
 
 void* raft_shm_init(const char *shm_path);
 size_t raft_shm_size();
+uint64_t raft_shm_string(const char *str, size_t len);
 
 RaftConfig* raft_get_config();
 

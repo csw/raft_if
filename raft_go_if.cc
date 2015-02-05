@@ -19,6 +19,7 @@
  *
  */
 
+#include <algorithm>
 #include <chrono>
 #include <cinttypes>
 #include <cstdio>
@@ -150,6 +151,16 @@ void dispatch_LastContact(api::LastContact::slot_t& slot)
     RaftLastContact(&slot);
 }
 
+void dispatch_LastIndex(api::LastIndex::slot_t& slot)
+{
+    RaftLastIndex(&slot);
+}
+
+void dispatch_GetLeader(api::GetLeader::slot_t& slot)
+{
+    RaftGetLeader(&slot);
+}
+
 void dispatch_Snapshot(api::Snapshot::slot_t& slot)
 {
     assert(slot.tag == CallTag::Snapshot);
@@ -189,8 +200,25 @@ void raft_reply_immed(raft_call call_p, RaftError error)
     raft_reply_(*(BaseSlot*) call_p, error);
 }
 
+void raft_reply_apply(raft_call call_p, uint64_t retval, RaftError error)
+{
+    auto* slot = (BaseSlot*) call_p;
+    mutex_lock lock(slot->owned);
+    slot->timings.record("RaftApply return");
+    assert(slot->tag == CallTag::Apply);
+    if (!error) {
+        slot->reply(retval);
+    } else {
+        zlog_error(go_cat, "Sending error response from RaftApply: %d", error);
+        slot->reply(error);
+    }
+}
+
 namespace {
 
+/**
+ * Send reply IFF we already hold the lock on slot!
+ */
 void raft_reply_(BaseSlot& slot, RaftError error)
 {
     slot.timings.record("Raft call return");
@@ -206,20 +234,6 @@ void raft_reply_value(raft_call call, uint64_t retval)
     mutex_lock lock(slot->owned);
     slot->timings.record("Raft call return");
     slot->reply(retval);
-}
-
-void raft_reply_apply(raft_call call_p, uint64_t retval, RaftError error)
-{
-    auto* slot = (BaseSlot*) call_p;
-    mutex_lock lock(slot->owned);
-    slot->timings.record("RaftApply return");
-    assert(slot->tag == CallTag::Apply);
-    if (!error) {
-        slot->reply(retval);
-    } else {
-        zlog_error(go_cat, "Sending error response from RaftApply: %d", error);
-        slot->reply(error);
-    }
 }
 
 uint64_t raft_fsm_apply(uint64_t index, uint64_t term, RaftLogType type,
@@ -302,6 +316,16 @@ void* raft_shm_init(const char *shm_path)
 size_t raft_shm_size()
 {
     return raft::shm.get_size();
+}
+
+uint64_t raft_shm_string(const char *str, size_t len)
+{
+    char* buf = (char*) raft::shm.allocate(len+1);
+    assert(raft::in_shm_bounds((void*) buf));
+    memcpy(buf, str, len);
+    free((void*) str);
+    buf[len] = '\0';
+    return (uint64_t) raft::shm.get_handle_from_address(buf);
 }
 
 RaftConfig* raft_get_config()
