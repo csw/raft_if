@@ -99,6 +99,11 @@ func Start(shmPath string) {
 	port := uint16(shared_conf.listen_port)
 	peers_s := C.GoString(&shared_conf.peers[0])
 
+	err = raft.ValidateConfig(conf)
+	if err != nil {
+		log.Fatalf("Invalid Raft configuration: %v\n%v", err, conf)
+	}
+
 	fsm := &RemoteFSM{}
 
 	var svcs *RaftServices
