@@ -91,6 +91,9 @@ func Start(shmPath string) {
 	go WatchParent(ppid)
 
 	shared_conf := C.raft_get_config()
+	if shared_conf.verbose {
+		logging.SetLevel(logging.DEBUG, "raft_if")
+	}
 	conf := CopyConfig(shared_conf)
 	dir := C.GoString(&shared_conf.base_dir[0])
 	port := uint16(shared_conf.listen_port)
