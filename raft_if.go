@@ -32,6 +32,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/hashicorp/raft"
+	"github.com/hashicorp/raft-boltdb"
 	"github.com/hashicorp/raft-mdb"
 	"github.com/op/go-logging"
 	"io/ioutil"
@@ -190,7 +191,7 @@ func DummyServices() (*RaftServices, error) {
 	}
 	snapStore, err := raft.NewFileSnapshotStore(snapDir, 1, os.Stderr)
 	if err != nil {
-		log.Panicf("Creating snapshot store in %s failed: %v",
+		return nil, fmt.Errorf("Creating snapshot store in %s failed: %v",
 			snapDir, err)
 	}
 	return &RaftServices{logStore, stableStore, snapStore}, nil
@@ -202,11 +203,19 @@ func StdServices(base string, cfg *C.RaftConfig) (*RaftServices, error) {
 		return nil, err
 	}
 
-	mdbStore, err := raftmdb.NewMDBStore(base)
+	dbType := C.GoString(&cfg.backend_type[0])
+	dbStore, err := makeDBStore(base, dbType)
 	if err != nil {
-		log.Error("Creating MDBStore for %s failed: %v\n", base, err)
+		log.Error("Creating %s database store for %s failed: %v\n",
+			dbType, base, err)
 		return nil, err
 	}
+	logStore, ok := dbStore.(raft.LogStore)
+	if !ok  {
+		return nil, fmt.Errorf("%s database store is not a LogStore?", dbType)
+	}
+	log.Info("Set up %s database store in %s.", dbType, base)
+	
 	// TODO: set log destination
 	snapStore, err :=
 		raft.NewFileSnapshotStore(base, int(cfg.RetainSnapshots), os.Stderr)
@@ -215,7 +224,18 @@ func StdServices(base string, cfg *C.RaftConfig) (*RaftServices, error) {
 			base, err)
 		return nil, err
 	}
-	return &RaftServices{mdbStore, mdbStore, snapStore}, nil
+	return &RaftServices{logStore, dbStore, snapStore}, nil
+}
+
+func makeDBStore(base string, dbType string) (raft.StableStore, error) {
+	switch dbType {
+	case "boltdb":
+		return raftboltdb.NewBoltStore(fmt.Sprintf("%s/raft.db", base))
+	case "mdb":
+		return raftmdb.NewMDBStore(base)
+	default:
+		return nil, fmt.Errorf("Unsupported backend type '%s'!", dbType)
+	}
 }
 
 func MkdirIfNeeded(path string) error {
