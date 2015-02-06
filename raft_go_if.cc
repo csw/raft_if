@@ -116,8 +116,7 @@ uint64_t raft_fsm_apply(uint64_t index, uint64_t term, RaftLogType type,
     if (in_shm_bounds(cmd_buf)) {
         cmd_handle = raft::shm.get_handle_from_address(cmd_buf);
     } else {
-        shm_buf = (char*) raft::shm.allocate(cmd_len);
-        assert(shm_buf);
+        shm_buf = raft::allocate_buf(cmd_len);
         zlog_debug(go_cat, "Allocated %lu-byte buffer for log command at %p.",
                    cmd_len, shm_buf);
         memcpy(shm_buf, cmd_buf, cmd_len);
@@ -133,7 +132,7 @@ uint64_t raft_fsm_apply(uint64_t index, uint64_t term, RaftLogType type,
     zlog_debug(go_cat, "FSM response %#" PRIx64 , slot->retval);
 
     if (shm_buf)
-        shm.deallocate(shm_buf);
+        raft::free_buf(shm_buf);
 
     //slot->timings.print();
     //fprintf(stderr, "====================\n");
@@ -191,7 +190,7 @@ size_t raft_shm_size()
 
 uint64_t raft_shm_string(const char *str, size_t len)
 {
-    char* buf = (char*) raft::shm.allocate(len+1);
+    char* buf = (char*) raft::allocate_buf(len+1);
     assert(raft::in_shm_bounds((void*) buf));
     memcpy(buf, str, len);
     free((void*) str);
